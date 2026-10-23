@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Shell hint (dsh-hint-shell)",
+    "description": "Adds \"type ! for shell commands\" to the empty composer placeholder and shows a gray hint once ! is typed."
+  }
+}

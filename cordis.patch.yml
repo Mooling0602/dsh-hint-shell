@@ -1,0 +1,13 @@
+# dsh-hint-shell bundle patch.
+#
+# Referenced by package.json `dsh.bundle.patch`. Installing the package into a
+# profile appends it to that profile's layer stack, and this row loads the host
+# half (index.js) as an ordinary Cordis plugin. The browser half rides the
+# `dsh.client` scan (client.js).
+#
+# The host half contributes nothing at runtime — the feature lives entirely in
+# the browser — but a bundle row is what makes the profile load the package at
+# all, so the row stays.
+- insert:
+    - id: dsh-hint-shell
+      name: 'dsh-hint-shell'

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Shell 提示 (dsh-hint-shell)",
+    "description": "在空输入框的占位文案后追加「输入 ! 执行 shell 命令」，输入 ! 后显示灰色提示「输入 shell 命令…」。"
+  }
+}

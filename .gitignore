@@ -1,0 +1,12 @@
+# Installed development dependencies (npm install).
+node_modules/
+
+# Local analysis/scratch output.
+.scratch/
+dist/
+
+# Packed releases.
+*.tgz
+
+# Editor / OS noise.
+.DS_Store

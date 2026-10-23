@@ -1,0 +1,65 @@
+{
+  "name": "dsh-hint-shell",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Composer hint for shell commands in DeepSeek Harness: appends \"type ! for shell commands\" to the empty composer placeholder and shows a gray hint once ! is typed.",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "cordis",
+    "composer",
+    "hint",
+    "shell"
+  ],
+  "license": "MIT",
+  "icon": "icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node test/run.test.ts && node test/host.test.ts && node test/dsh-format.test.ts"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "author": "Mooling0602",
+  "homepage": "https://github.com/Mooling0602/dsh-hint-shell",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mooling0602/dsh-hint-shell.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Mooling0602/dsh-hint-shell/issues"
+  }
+}
