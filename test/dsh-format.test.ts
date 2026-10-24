@@ -16,14 +16,18 @@
  * The harness packages are resolved from the host installation, never from a
  * local dependency: a plugin ships without them. When no installation can be
  * found the file reports that it skipped instead of failing an unrelated build.
+ * Both the npm layout (`<npm root -g>/@deepseek-ai/dsh/node_modules`) and a
+ * monorepo checkout (the workspace behind the `dsh` launcher) are probed, and
+ * every candidate is derived at runtime rather than pinned: an absolute path
+ * would only ever be right on the machine it was written on.
  *
  * Run: node test/dsh-format.test.ts
  */
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, realpathSync, type Dirent } from 'node:fs';
+import { delimiter, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
@@ -44,34 +48,119 @@ async function check(label: string, body: () => void | Promise<void>): Promise<v
 }
 
 /**
+ * The Harness packages this test drives, all three of which must resolve from
+ * the same directory.
+ */
+const NEEDED = ['dsh-session', 'dsh-session-format-catalog', 'dsh-session-format-v3-to-v4'] as const;
+
+/**
+ * Whether a directory holds every package in {@link NEEDED}.
+ *
+ * @param modules - candidate `@deepseek-ai` directory.
+ * @returns true when all three packages are present.
+ */
+function holdsAll(modules: string): boolean {
+  return NEEDED.every((name) => existsSync(join(modules, name, 'package.json')));
+}
+
+/**
+ * List the directories matching one shallow depth pattern.
+ *
+ * A monorepo checkout nests packages as `apps/<name>` and
+ * `packages/<group>/<name>`, so these are the only two shapes worth walking; a
+ * full tree search would cost more than the test itself.
+ *
+ * @param root - directory to search.
+ * @param pattern - whether to walk apps or packages.
+ * @returns the matched directories, or none when the root has no such shape.
+ */
+function children(root: string, pattern: 'apps' | 'packages' | 'vendor'): string[] {
+  const read = (dir: string): Dirent[] => {
+    try {
+      return readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+  };
+  const visible = (entries: Dirent[]) =>
+    entries
+      .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+      .map((entry) => entry.name);
+  const first = visible(read(join(root, pattern))).map((name) => join(root, pattern, name));
+  if (pattern !== 'packages') return first;
+  return first.flatMap((dir) => visible(read(dir)).map((name) => join(dir, name)));
+}
+
+/**
+ * Locate the checkout behind the installed `dsh` command.
+ *
+ * The launcher is a symlink into the installation prefix, and the workspace
+ * sits at `<prefix>/lib/deepseek-harness-git`, so the root is read from the
+ * resolved launcher instead of being pinned: a hard-coded prefix would break on
+ * the first package update.
+ *
+ * @returns the checkout root, or undefined when no `dsh` launcher is on PATH.
+ */
+function checkoutFromPath(): string | undefined {
+  const path = process.env.PATH ?? '';
+  for (const dir of path.split(delimiter)) {
+    if (dir.length === 0) continue;
+    let launcher: string;
+    try {
+      launcher = realpathSync(join(dir, 'dsh'));
+    } catch {
+      continue;
+    }
+    const checkout = join(dirname(dirname(launcher)), 'lib', 'deepseek-harness-git');
+    if (existsSync(join(checkout, 'package.json'))) return checkout;
+  }
+  return undefined;
+}
+
+/**
  * Locate the `@deepseek-ai/*` packages an installed Harness resolves.
+ *
+ * Packages that depend on the session format bring all three at once, so any
+ * `node_modules` directory that holds the full set is usable. In a monorepo
+ * checkout that is a dependency of the JSONL persistence package rather than
+ * the CLI's own `node_modules`, which holds only `dsh-session`.
  *
  * @returns the directory containing them, or undefined when none is installed.
  */
 function installedModules(): string | undefined {
-  const roots: string[] = [];
   const override = process.env.DSH_MODULES;
-  if (override !== undefined && override.length > 0) roots.push(override);
+  if (override !== undefined && override.length > 0) {
+    const modules = join(override, '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai');
+    if (holdsAll(modules)) return modules;
+    if (holdsAll(override)) return override;
+  }
   try {
     const root = execFileSync('npm', ['root', '-g'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-    if (root.length > 0) roots.push(root);
+    if (root.length > 0) {
+      const modules = join(root, '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai');
+      if (holdsAll(modules)) return modules;
+    }
   } catch {
-    // No global npm root: the override or the skip below decides.
+    // No global npm root: the checkout probe below decides.
   }
-  for (const root of roots) {
-    const modules = join(root, '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai');
-    if (existsSync(join(modules, 'dsh-session', 'package.json'))) return modules;
-  }
-  return undefined;
+  const checkout = checkoutFromPath();
+  if (checkout === undefined) return undefined;
+  const candidates = [
+    join(checkout, 'node_modules', '@deepseek-ai'),
+    ...children(checkout, 'apps').map((dir) => join(dir, 'node_modules', '@deepseek-ai')),
+    ...children(checkout, 'packages').map((dir) => join(dir, 'node_modules', '@deepseek-ai')),
+    ...children(checkout, 'vendor').map((dir) => join(dir, 'node_modules', '@deepseek-ai')),
+  ];
+  return candidates.find(holdsAll);
 }
 
 const modules = installedModules();
 if (modules === undefined) {
   console.log('\n[7] installed Harness — SKIPPED (no @deepseek-ai/dsh installation found;');
-  console.log('    set DSH_MODULES to the global node_modules directory to run it)');
+  console.log('    set DSH_MODULES to a node_modules directory holding the session packages)');
   process.exit(0);
 }
 

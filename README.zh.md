@@ -151,8 +151,8 @@ npm test             # 输入框、shell 行，以及针对已安装 Harness 的
 
 `test/dsh-format.test.ts` 针对已安装的 Harness 驱动 Host 钩子：通过真实的 `Session` 追加，
 再用真实的格式 v4 读取器编码、准入并恢复日志，因此一种「实时可用但无法重新打开」的记录形状会让
-测试失败。它从宿主安装解析 Harness 包（`DSH_MODULES`，或全局 `npm root -g`），找不到安装时
-报告跳过。
+测试失败。它从宿主安装解析 Harness 包——`DSH_MODULES`、全局 `npm root -g` 布局，或 `PATH`
+上 `dsh` 启动脚本背后的 checkout——都找不到时报告跳过。
 
 `client.js` 必须保持为单个自包含文件：客户端模块加载器的 `require` 只解析宿主包，无法解析相对
 导入，这就是构建把 `src/` 打包进来、而不是直接发布它的原因。`index.js` 是构建产物，而非直接

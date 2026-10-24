@@ -191,8 +191,9 @@ npm test             # composer, shell-line, and installed-Harness format tests
 appends through a real `Session`, then encodes, admits, and restores the log
 through the real format v4 reader, so a record shape the live app accepts but
 cannot re-open fails the suite. It resolves the harness packages from the host
-installation (`DSH_MODULES`, or the global `npm root -g`) and reports a skip when
-none is installed.
+installation — `DSH_MODULES`, the global `npm root -g` layout, or the checkout
+behind the `dsh` launcher on `PATH` — and reports a skip when none of them is
+available.
 
 `client.js` must stay a single self-contained file: the Client module loader's
 `require` resolves host packages only and cannot resolve relative imports, which
