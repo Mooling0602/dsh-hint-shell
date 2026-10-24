@@ -95,5 +95,24 @@ export interface HostPluginContext {
    */
   get(name: 'subprocess'): import('./exec.ts').SubprocessLike | undefined;
   get(name: 'workingDirectory'): { get(session: SessionLike): string } | undefined;
+  get(name: 'settings'): SettingsFormsLike | undefined;
   readonly logger?: { warn(message: string): void };
+}
+
+/**
+ * One readable settings namespace, as `settings.describe()` reports it.
+ *
+ * Only the two fields this plugin inherits are described; the descriptor
+ * carries more (schema, revision, secrets) and none of it is needed here.
+ */
+export interface SettingsNamespaceLike {
+  /** The profile entry id the values belong to. */
+  readonly ns: string;
+  /** The namespace's live form values. */
+  readonly value?: unknown;
+}
+
+/** The `settings` service, narrowed to the one read this plugin makes. */
+export interface SettingsFormsLike {
+  describe(): readonly SettingsNamespaceLike[];
 }

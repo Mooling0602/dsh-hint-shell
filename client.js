@@ -14,6 +14,20 @@ window.__ModuleLoader__.load({
       var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
       var __getOwnPropNames = Object.getOwnPropertyNames;
       var __hasOwnProp = Object.prototype.hasOwnProperty;
+      var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
+        get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
+      }) : x)(function(x) {
+        if (typeof require !== "undefined") return require.apply(this, arguments);
+        throw Error('Dynamic require of "' + x + '" is not supported');
+      });
+      var __esm = (fn, res, err) => function __init() {
+        if (err) throw err[0];
+        try {
+          return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+        } catch (e) {
+          throw err = [e], e;
+        }
+      };
       var __export = (target, all) => {
         for (var name in all)
           __defProp(target, name, { get: all[name], enumerable: true });
@@ -28,41 +42,189 @@ window.__ModuleLoader__.load({
       };
       var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
+      // src/locales.ts
+      function text(t, key) {
+        const translated = t(key);
+        return translated === key ? en[key] : translated;
+      }
+      function formLabels(t) {
+        return {
+          unavailable: text(t, "unavailable"),
+          readOnly: text(t, "readOnly"),
+          saveFailed: text(t, "saveFailed"),
+          save: text(t, "save"),
+          saving: text(t, "saving")
+        };
+      }
+      var NS, PACKAGE_NAME, en, zh;
+      var init_locales = __esm({
+        "src/locales.ts"() {
+          "use strict";
+          NS = "dsh-hint-shell";
+          PACKAGE_NAME = "dsh-hint-shell";
+          en = {
+            title: "Shell hint",
+            description: "Type ! in an empty composer to run a shell command, with a cap on how long a command may be.",
+            maxCommandChars: "Command length cap (characters)",
+            maxCommandCharsHint: "A command longer than this is refused outright and never runs.",
+            overridden: "Overridden",
+            reset: "Reset to default",
+            readOnly: "This deployment stores settings read-only.",
+            unavailable: "This plugin is not loaded, so it cannot be configured right now.",
+            save: "Save",
+            saving: "Saving…",
+            saveFailed: "The deployment did not accept these values; they were left for you to correct.",
+            invalidNumber: "Enter a number, or leave blank to use the default.",
+            idle: ", type ! for shell commands",
+            armed: "Enter a shell command…"
+          };
+          zh = {
+            title: "Shell 提示",
+            description: "在空输入框输入 ! 即可执行 shell 命令，并可调整命令长度上限。",
+            maxCommandChars: "命令长度上限（字符）",
+            maxCommandCharsHint: "超过此长度的命令会被直接拒绝，不会执行。",
+            overridden: "已覆盖",
+            reset: "恢复默认",
+            readOnly: "此部署以只读方式存储设置。",
+            unavailable: "该插件未加载，暂时无法配置。",
+            save: "保存",
+            saving: "保存中…",
+            saveFailed: "该部署未接受这些值，已保留供你修改。",
+            invalidNumber: "请输入数字，留空则使用默认值。",
+            idle: "，输入 ! 执行 shell 命令",
+            armed: "输入 shell 命令…"
+          };
+        }
+      });
+
+      // src/HintShellCard.tsx
+      function HintShellCard(props) {
+        const { t } = props;
+        const state = props.useHintShellCard((snapshot) => snapshot);
+        if (props.view === "summary") return t("description");
+        const disabled = !state.writable;
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          import_dsh_client_ui_primitives.SettingsForm,
+          {
+            labels: formLabels(t),
+            state,
+            onSave: props.save,
+            onDiscard: props.discard,
+            children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              import_dsh_client_ui_primitives.SettingsValueField,
+              {
+                id: "plugin-config-hint-shell-command",
+                label: t("maxCommandChars"),
+                hint: t("maxCommandCharsHint"),
+                overriddenLabel: t("overridden"),
+                resetLabel: t("reset"),
+                invalidLabel: t("invalidNumber"),
+                numeric: true,
+                disabled,
+                text: state.maxCommandChars.text,
+                overridden: state.maxCommandChars.overridden,
+                invalid: state.maxCommandChars.invalid,
+                onEdit: (text2) => {
+                  props.edit("maxCommandChars", text2);
+                },
+                onReset: () => {
+                  props.resetField("maxCommandChars");
+                }
+              }
+            )
+          }
+        );
+      }
+      var import_dsh_client_ui_primitives, import_jsx_runtime;
+      var init_HintShellCard = __esm({
+        "src/HintShellCard.tsx"() {
+          "use strict";
+          import_dsh_client_ui_primitives = __require("@deepseek-ai/dsh-client-ui-primitives");
+          init_locales();
+          import_jsx_runtime = __require("react/jsx-runtime");
+        }
+      });
+
+      // src/hint-shell-card-controller.ts
+      var import_dsh_client_ui_primitives2, HintShellCardController;
+      var init_hint_shell_card_controller = __esm({
+        "src/hint-shell-card-controller.ts"() {
+          "use strict";
+          import_dsh_client_ui_primitives2 = __require("@deepseek-ai/dsh-client-ui-primitives");
+          HintShellCardController = class {
+            form;
+            store;
+            /** @param scope - the shared configuration form of this plugin's Host entry. */
+            constructor(scope) {
+              this.form = new import_dsh_client_ui_primitives2.SettingsFormModel(scope, [(0, import_dsh_client_ui_primitives2.settingsNumberField)("maxCommandChars")]);
+              this.store = this.form.bind(() => this.projection());
+            }
+            /**
+             * Project the form onto the page's state.
+             *
+             * @returns the frame's state plus the control's state.
+             */
+            projection() {
+              return {
+                ...this.form.shell(),
+                maxCommandChars: this.form.field("maxCommandChars")
+              };
+            }
+            /**
+             * Build the face the page's slot registration injects.
+             *
+             * @returns the page's snapshot and the form's own actions.
+             */
+            inject() {
+              return { hooks: { hintShellCard: this.store }, ...this.form.actions() };
+            }
+            /** Release the form subscription. */
+            dispose() {
+              this.form.dispose();
+            }
+          };
+        }
+      });
+
+      // src/settings-page.tsx
+      var settings_page_exports = {};
+      __export(settings_page_exports, {
+        mountSettingsPage: () => mountSettingsPage
+      });
+      function mountSettingsPage(options) {
+        const { configForms, slots, namespace, packageName, rowId } = options;
+        const controller = new HintShellCardController(configForms.get(namespace));
+        const disposeEntry = slots.register(
+          {
+            name: "plugins.row.config",
+            // The page dispatches a keyed slot by exactly this key, so it has to match
+            // `rowConfigKey(pkg.name, row.rowId)` or the entry never renders.
+            key: `${packageName}#${rowId}`,
+            locale: namespace,
+            inject: () => controller.inject()
+          },
+          HintShellCard
+        );
+        return () => {
+          disposeEntry();
+          controller.dispose();
+        };
+      }
+      var init_settings_page = __esm({
+        "src/settings-page.tsx"() {
+          "use strict";
+          init_HintShellCard();
+          init_hint_shell_card_controller();
+        }
+      });
+
       // src/index.ts
       var index_exports = {};
       __export(index_exports, {
         apply: () => apply,
         inject: () => inject
       });
-
-      // src/copy.ts
-      var NS = "dsh-hint-shell";
-      var IDLE_PHRASE = {
-        zh: "，输入 ! 执行 shell 命令",
-        en: ", type ! for shell commands"
-      };
-      var ARMED_HINT = {
-        zh: "输入 shell 命令…",
-        en: "Enter a shell command…"
-      };
-      var DICTIONARY = {
-        zh: {
-          meta: "输入框 shell 命令提示",
-          idle: IDLE_PHRASE["zh"] ?? "",
-          armed: ARMED_HINT["zh"] ?? ""
-        },
-        en: {
-          meta: "Composer shell command hint",
-          idle: IDLE_PHRASE["en"] ?? "",
-          armed: ARMED_HINT["en"] ?? ""
-        }
-      };
-      function textOf(t, key, fallback) {
-        const translated = t(key);
-        return translated === key ? fallback : translated;
-      }
-
-      // src/index.ts
+      init_locales();
       var SYMBOL = "!";
       var CONVERSATION_NS = "conversation";
       var PLACEHOLDER_KEYS = /* @__PURE__ */ new Set([
@@ -105,10 +267,10 @@ window.__ModuleLoader__.load({
               const base = original.call(this, ns, key, params);
               if (ns !== CONVERSATION_NS || !PLACEHOLDER_KEYS.has(key)) return base;
               if (typeof base !== "string" || base.length === 0) return base;
-              const text = clause();
-              if (text.length === 0) return base;
-              if (base.includes(text)) return base;
-              return base + text;
+              const text2 = clause();
+              if (text2.length === 0) return base;
+              if (base.includes(text2)) return base;
+              return base + text2;
             }
           });
         } catch (error) {
@@ -147,24 +309,16 @@ window.__ModuleLoader__.load({
       function apply(ctx) {
         const locale = ctx.locale;
         const t = locale.bind(NS);
-        const language = () => {
-          try {
-            return locale.getSnapshot().active.toLowerCase().startsWith("en") ? "en" : "zh";
-          } catch {
-            return "zh";
-          }
-        };
-        ctx.effect(() => locale.register(NS, DICTIONARY), "dsh-hint-shell: register copy");
         ctx.effect(
-          () => installPlaceholderClause(locale, () => {
-            const tag = language();
-            return textOf(t, "idle", IDLE_PHRASE[tag] ?? IDLE_PHRASE["zh"] ?? "");
-          }),
+          () => locale.register(NS, { zh, en }),
+          "dsh-hint-shell: register copy"
+        );
+        ctx.effect(
+          () => installPlaceholderClause(locale, () => text(t, "idle")),
           "dsh-hint-shell: append idle clause to the composer placeholder"
         );
         const repaint = () => {
-          const tag = language();
-          const hint = textOf(t, "armed", ARMED_HINT[tag] ?? ARMED_HINT["zh"] ?? "");
+          const hint = text(t, "armed");
           const cards = document.querySelectorAll(`[${CARD_ATTR}]`);
           for (const card of Array.from(cards)) {
             const draft = draftOf(card);
@@ -208,7 +362,63 @@ window.__ModuleLoader__.load({
             }
           };
         }, "dsh-hint-shell: repaint on draft change");
+        installSettingsPage(ctx);
         emit("info", "ready");
+      }
+      function installSettingsPage(ctx) {
+        const configForms = optionalService(ctx, "configForms");
+        const slots = optionalService(ctx, "slots");
+        if (configForms === void 0 || slots === void 0) {
+          emit("warn", "settings page unavailable: no configForms/slots service");
+          return;
+        }
+        let page;
+        const loadPage = () => {
+          page ??= Promise.resolve().then(() => (init_settings_page(), settings_page_exports));
+          return page;
+        };
+        ctx.effect(
+          () => configForms.whileServed(
+            [NS],
+            () => (
+              // The slot has to exist before its keyed entry can be registered; this
+              // is the same dependency the official pages declare.
+              slots.inject("plugins.row.config", () => {
+                let dispose;
+                let cancelled = false;
+                void loadPage().then((module) => {
+                  if (cancelled) return;
+                  dispose = module.mountSettingsPage({
+                    configForms,
+                    slots,
+                    namespace: NS,
+                    packageName: PACKAGE_NAME,
+                    rowId: NS
+                  });
+                }).catch((error) => {
+                  emit("warn", `settings page failed to load: ${String(error)}`);
+                });
+                return () => {
+                  cancelled = true;
+                  dispose?.();
+                };
+              })
+            )
+          ),
+          "dsh-hint-shell: settings page"
+        );
+      }
+      function optionalService(ctx, name) {
+        const getter = ctx.get;
+        if (typeof getter !== "function") {
+          const direct = ctx[name];
+          return direct;
+        }
+        try {
+          return getter.call(ctx, name);
+        } catch {
+          return void 0;
+        }
       }
       var inject = ["locale"];
       return __toCommonJS(index_exports);

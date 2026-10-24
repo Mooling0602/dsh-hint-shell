@@ -10,6 +10,9 @@
  */
 
 import assert from 'node:assert/strict';
+import { existsSync, realpathSync } from 'node:fs';
+import { delimiter, dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import {
   formatOutcome,
@@ -19,9 +22,26 @@ import {
   type ShellOutcome,
   type SubprocessLike,
 } from '../src/exec.ts';
+import {
+  DEFAULT_MAX_COMMAND_CHARS,
+  FALLBACK_TIMEOUT_MS,
+  shellBudgetFrom,
+  type Config,
+} from '../src/config.ts';
 
 let checks = 0;
 let failures = 0;
+let skipped = 0;
+
+/**
+ * Mark one check as skipped rather than silently passing it.
+ *
+ * @param reason - why the check could not run.
+ */
+function reportSkipped(reason: string): void {
+  skipped += 1;
+  console.log(`  skip (${reason})`);
+}
 
 /** Run one assertion group. */
 async function check(label: string, body: () => void | Promise<void>): Promise<void> {
@@ -75,6 +95,7 @@ await check('echoes the command and the exit status', () => {
     exitCode: 0,
     signal: null,
     truncated: false,
+    spill: {},
   });
   assert.equal(text, '$ ls\na\nb\n[exit 0]');
 });
@@ -86,6 +107,7 @@ await check('surfaces stderr separately', () => {
     exitCode: 1,
     signal: null,
     truncated: false,
+    spill: {},
   });
   assert.match(text, /\[stderr\]/);
   assert.match(text, /No such file or directory/);
@@ -99,10 +121,11 @@ await check('reports a signal instead of an exit code', () => {
     exitCode: null,
     signal: 'SIGKILL',
     truncated: false,
+    spill: {},
   });
   assert.match(text, /killed by SIGKILL/);
 });
-await check('reports truncation', () => {
+await check('reports truncation and says the full stream is gone', () => {
   const text = formatOutcome({
     command: 'cat big',
     stdout: 'x',
@@ -110,13 +133,55 @@ await check('reports truncation', () => {
     exitCode: 0,
     signal: null,
     truncated: true,
+    spill: {},
   });
-  assert.match(text, /\[output truncated\]/);
+  assert.match(text, /\[output truncated; the full stream was too large to keep\]/);
+});
+await check('points at the spill file when the full stream survived', () => {
+  const text = formatOutcome({
+    command: 'cat big',
+    stdout: 'x',
+    stderr: '',
+    exitCode: 0,
+    signal: null,
+    truncated: true,
+    spill: { stdout: '/tmp/dsh-spill-abc' },
+  });
+  assert.match(text, /\[output truncated; full stream: \/tmp\/dsh-spill-abc\]/);
+});
+await check('names a timeout instead of an exit code', () => {
+  const text = formatOutcome({
+    command: 'sleep 100',
+    stdout: '',
+    stderr: '',
+    exitCode: null,
+    signal: null,
+    timedOut: true,
+    truncated: false,
+    spill: {},
+  });
+  assert.match(text, /\[timed out and was terminated\]/);
+});
+await check('an over-long line echoes an elided command, not the whole thing', () => {
+  const long = 'x'.repeat(12_000);
+  const text = formatOutcome({
+    command: long,
+    stdout: '',
+    stderr: '',
+    exitCode: null,
+    signal: null,
+    rejectedTooLong: true,
+    truncated: false,
+    spill: {},
+    failure: 'over the limit',
+  });
+  assert.equal(text.includes(long), false);
+  assert.match(text, /12000 characters/);
 });
 
 console.log('\n[3] failure classification');
 
-const ok: ShellOutcome = { command: 'ls', stdout: '', stderr: '', exitCode: 0, signal: null, truncated: false };
+const ok: ShellOutcome = { command: 'ls', stdout: '', stderr: '', exitCode: 0, signal: null, truncated: false, spill: {} };
 await check('exit 0 is success', () => {
   assert.equal(isFailed(ok), false);
 });
@@ -131,6 +196,58 @@ await check('a spawn failure is failure', () => {
 });
 
 console.log('\n[4] execution — argv, cwd, and collected output');
+
+/**
+ * Locate an installed Harness checkout, for the checks that need a process the
+ * plugin can actually kill.
+ *
+ * The provider is a composed Cordis service rather than an npm library, so it is
+ * loaded from the installation. Without one, those checks report as skipped:
+ * a fake spawn cannot prove that a timeout terminates anything.
+ *
+ * Everything here is derived at runtime. A pinned path would only ever be right
+ * on the machine it was written on, and a miss silently downgrades the checks to
+ * skips — which is precisely how they stop guarding anything.
+ *
+ * @returns the checkout root, or undefined when no installation is resolvable.
+ */
+function harnessCheckout(): string | undefined {
+  const usable = (candidate: string | undefined): candidate is string =>
+    candidate !== undefined
+    && candidate.length > 0
+    && existsSync(join(candidate, 'vendor/cordis/lib/index.js'));
+  const explicit = [process.env.DSH_INSTALL, process.env.DSH].find(usable);
+  if (explicit !== undefined) return explicit;
+  // The launcher is a symlink into the installation prefix, and the workspace
+  // sits at `<prefix>/lib/deepseek-harness-git`.
+  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+    if (dir.length === 0) continue;
+    let launcher: string;
+    try {
+      launcher = realpathSync(join(dir, 'dsh'));
+    } catch {
+      continue;
+    }
+    const checkout = join(dirname(dirname(launcher)), 'lib', 'deepseek-harness-git');
+    if (usable(checkout)) return checkout;
+  }
+  return undefined;
+}
+
+/** The installation backing {@link realSubprocess}, when there is one. */
+const checkout = harnessCheckout();
+
+/** The real subprocess provider, or undefined when no installation is present. */
+async function realSubprocess(): Promise<SubprocessLike | undefined> {
+  if (checkout === undefined) return undefined;
+  const { Context } = await import(pathToFileURL(join(checkout, 'vendor/cordis/lib/index.js')).href);
+  const { default: LocalSubprocessRuntime } = await import(
+    pathToFileURL(join(checkout, 'packages/subprocess/subprocess-local/lib/index.js')).href
+  );
+  const ctx = new Context();
+  await ctx.plugin(LocalSubprocessRuntime);
+  return ctx.get('subprocess') as SubprocessLike | undefined;
+}
 
 /** Build a subprocess double that records the spec it was given. */
 function fakeSubprocess(reply: { stdout: string; stderr: string; exitCode: number | null; signal?: string | null }) {
@@ -188,6 +305,33 @@ await check('a rejected done becomes a reported failure, not an exception', asyn
   assert.match(outcome.failure ?? '', /provider failed/);
   assert.equal(outcome.stdout, '');
 });
+await check('a command over the length cap is refused before it spawns', async () => {
+  // The cap is this plugin's one configurable limit; its default is what a
+  // deployment that never edits it runs under, so the boundary is worth pinning.
+  const { service, seen } = fakeSubprocess({ stdout: '', stderr: '', exitCode: 0 });
+  const long = 'x'.repeat(DEFAULT_MAX_COMMAND_CHARS + 1);
+  const outcome = await runShellLine(service, { command: long }, '/tmp', new AbortController().signal);
+  assert.equal(seen.spec, undefined);
+  assert.match(outcome.failure ?? '', new RegExp(`over the ${DEFAULT_MAX_COMMAND_CHARS}-character limit`));
+  assert.equal(outcome.exitCode, null);
+});
+await check('a command exactly at the cap still runs', async () => {
+  const { service, seen } = fakeSubprocess({ stdout: 'ok', stderr: '', exitCode: 0 });
+  const atCap = 'y'.repeat(DEFAULT_MAX_COMMAND_CHARS);
+  const outcome = await runShellLine(service, { command: atCap }, '/tmp', new AbortController().signal);
+  assert.notEqual(seen.spec, undefined);
+  assert.equal(outcome.failure, undefined);
+  assert.equal(outcome.stdout, 'ok');
+});
+await check('a configured cap overrides the default', async () => {
+  // The settings page writes into `maxCommandChars`; a live value must reach the
+  // check, or editing it would appear to save and change nothing.
+  const { service, seen } = fakeSubprocess({ stdout: 'ok', stderr: '', exitCode: 0 });
+  const config = { maxCommandChars: { get: () => 5 } } as unknown as Config;
+  const outcome = await runShellLine(service, { command: 'echo hi' }, '/tmp', new AbortController().signal, config);
+  assert.equal(seen.spec, undefined);
+  assert.match(outcome.failure ?? '', /over the 5-character limit/);
+});
 await check('the spec carries every field the seam requires', async () => {
   // `graceMs` is required and the seam applies no defaults, so dropping it would
   // make every spawn throw at validation time.
@@ -198,6 +342,66 @@ await check('the spec carries every field the seam requires', async () => {
   assert.equal(spec.stdio.stdin, 'ignore');
   assert.equal(typeof (spec.stdio.stdout as { maxBytes: number }).maxBytes, 'number');
   assert.equal(typeof (spec.stdio.stderr as { maxBytes: number }).maxBytes, 'number');
+});
+
+console.log('\n[4b] inherited shell budget — the terminal page owns these numbers');
+
+await check('reads the timeout and output cap from bash-sandbox', async () => {
+  const budget = shellBudgetFrom([
+    { ns: 'bash-sandbox', value: { timeoutMs: 6_000, maxOutputBytes: 1_024 } },
+  ]);
+  assert.equal(budget.timeoutMs, 6_000);
+  assert.equal(budget.maxOutputBytes, 1_024);
+});
+await check('falls back to pwsh-sandbox when bash-sandbox is absent', async () => {
+  const budget = shellBudgetFrom([
+    { ns: 'pwsh-sandbox', value: { timeoutMs: 7_000, maxOutputBytes: 2_048 } },
+  ]);
+  assert.equal(budget.timeoutMs, 7_000);
+  assert.equal(budget.maxOutputBytes, 2_048);
+});
+await check('prefers bash-sandbox when both are served', async () => {
+  const budget = shellBudgetFrom([
+    { ns: 'pwsh-sandbox', value: { timeoutMs: 7_000 } },
+    { ns: 'bash-sandbox', value: { timeoutMs: 6_000 } },
+  ]);
+  assert.equal(budget.timeoutMs, 6_000);
+});
+await check('an unread budget leaves both fields to the fallback', async () => {
+  assert.deepEqual(shellBudgetFrom([]), {});
+  assert.deepEqual(shellBudgetFrom([{ ns: 'other', value: { timeoutMs: 1 } }]), {});
+});
+await check('a zero or non-numeric value is dropped, not inherited', async () => {
+  // A zero timeout would kill every command instantly, so it must not travel.
+  const budget = shellBudgetFrom([
+    { ns: 'bash-sandbox', value: { timeoutMs: 0, maxOutputBytes: 'big' } },
+  ]);
+  assert.equal(budget.timeoutMs, undefined);
+  assert.equal(budget.maxOutputBytes, undefined);
+});
+await check('an inherited timeout actually bounds the command', async () => {
+  // The regression this exists for: the terminal page's timeout was ignored
+  // because the plugin hard-coded its own. `sleep 5` must die at 150ms.
+  const subprocess = await realSubprocess();
+  if (subprocess === undefined) return reportSkipped('no Harness installation');
+  const started = Date.now();
+  const outcome = await runShellLine(
+    subprocess, { command: 'sleep 5' }, '/tmp',
+    new AbortController().signal, undefined, { timeoutMs: 150 },
+  );
+  const elapsed = Date.now() - started;
+  assert.equal(outcome.timedOut, true);
+  assert.ok(elapsed < 3_000, `expected an early kill, waited ${elapsed}ms`);
+});
+await check('an unread budget uses the executor default, not a shorter one', async () => {
+  // Without a readable budget the plugin must behave like a stock install; the
+  // important half is that it does not fall back to some tiny value.
+  const subprocess = await realSubprocess();
+  if (subprocess === undefined) return reportSkipped('no Harness installation');
+  const outcome = await runShellLine(subprocess, { command: 'echo ok' }, '/tmp', new AbortController().signal);
+  assert.equal(outcome.exitCode, 0);
+  assert.equal(outcome.failure, undefined);
+  assert.ok(FALLBACK_TIMEOUT_MS >= 60_000, 'the fallback must not be shorter than a stock timeout');
 });
 
 console.log('\n[5] host hook — a valid v4 tool exchange, then reject');
@@ -302,7 +506,10 @@ await check('a ! line appends a complete v4 tool exchange and rejects', async ()
   assert.deepEqual(result!.intent, { surfaceOp: 'append', sourceEventSeqs: [4] });
   assert.equal(call!.intent, undefined);
 
-  assert.match(result!.data.message.content[0].text, /^\$ ls/);
+  // The result opens with its provenance: the wire carries no message source,
+  // so this line is the only cue that the user, not the model, ran the command.
+  assert.match(result!.data.message.content[0].text, /^\[run by the user via `!` prompt symbol\]\n/);
+  assert.match(result!.data.message.content[0].text, /\$ ls/);
   assert.match(result!.data.message.content[0].text, /a b c/);
   assert.equal(result!.data.message.isError, false);
 });
@@ -617,5 +824,8 @@ await check('falls back to process.cwd() when no working-directory provider is c
   assert.equal(appended.filter((entry) => entry.type === 'tool/result').length, 1);
 });
 
-console.log(failures === 0 ? `\nAll ${checks} checks passed.\n` : `\n${failures} of ${checks} check(s) failed.\n`);
+const skippedNote = skipped === 0 ? '' : ` (${skipped} skipped)`;
+console.log(failures === 0
+  ? `\nAll ${checks} checks passed${skippedNote}.\n`
+  : `\n${failures} of ${checks} check(s) failed${skippedNote}.\n`);
 process.exit(failures === 0 ? 0 : 1);

@@ -14,11 +14,7 @@
  *   by the pre-step hook before dispatch, so a `!` line costs zero tokens.
  */
 
-/** Same cap the shipped shell tools apply, so a runaway command cannot flood a context. */
-const MAX_OUTPUT_BYTES = 30_000;
-
-/** Grace before a command's process group is force-killed. */
-const GRACE_MS = 2_000;
+import { readLimits, type Config, type Limits, type ShellBudget } from './config.ts';
 
 /** A parsed shell line. */
 export interface ShellLine {
@@ -61,7 +57,13 @@ export interface ShellOutcome {
   signal: string | null;
   /** Set when the line could not be executed at all (no command, spawn failure). */
   failure?: string;
+  /** Set when the command was terminated because it outlived its deadline. */
+  timedOut?: boolean;
+  /** Set when the command was rejected before it ran because the line was too long. */
+  rejectedTooLong?: boolean;
   truncated: boolean;
+  /** Files holding the complete output streams, when truncation spilled them. */
+  spill: { stdout?: string; stderr?: string };
 }
 
 /** Minimal shape of the subprocess service this file needs. */
@@ -79,8 +81,12 @@ export interface SubprocessLike {
     env?: NodeJS.ProcessEnv;
   }): {
     collected: {
-      stdout?: { readFrom(fromByte: number): { text: string; nextOffset: number; lossy: boolean } };
-      stderr?: { readFrom(fromByte: number): { text: string; nextOffset: number; lossy: boolean } };
+      stdout?: {
+        readFrom(fromByte: number): { text: string; nextOffset: number; lossy: boolean; spillPath?: string };
+      };
+      stderr?: {
+        readFrom(fromByte: number): { text: string; nextOffset: number; lossy: boolean; spillPath?: string };
+      };
     };
     done: Promise<{ exitCode: number | null; signal: string | null }>;
     terminate(): void;
@@ -90,10 +96,18 @@ export interface SubprocessLike {
 /**
  * Run one shell line and collect its output.
  *
+ * The caller owns the deadline: `subprocess` only reacts to the abort signal
+ * it is handed, so the timeout lives here as a timer that aborts the same
+ * signal the request uses. A timed-out command is a normal result — the turn
+ * still records what it managed to print — so the reason is reported through
+ * {@link ShellOutcome.timedOut} rather than thrown.
+ *
  * @param subprocess - the composed subprocess service.
  * @param line - the parsed line.
  * @param cwd - the session's working directory.
  * @param signal - cancellation owned by the submitting request.
+ * @param config - live limits; read once so one command sees one snapshot.
+ * @param budget - the shell executor's own timeout and output cap.
  * @returns the settled outcome; a spawn failure is reported through `failure`
  *   rather than thrown, because a failed command is a normal command result.
  */
@@ -102,18 +116,46 @@ export async function runShellLine(
   line: ShellLine,
   cwd: string,
   signal: AbortSignal,
+  config?: Config,
+  budget?: ShellBudget,
 ): Promise<ShellOutcome> {
+  const limits: Limits = readLimits(config, budget);
   const empty: ShellOutcome = {
     stdout: '',
     stderr: '',
     exitCode: null,
     signal: null,
     truncated: false,
+    spill: {},
   };
 
   if (line.command === '') {
     return { ...empty, failure: 'no command given' };
   }
+
+  // Reject before spawning: an over-long line is a user mistake worth naming,
+  // and it must not reach the log twice over (arguments plus result echo).
+  if (line.command.length > limits.maxCommandChars) {
+    return {
+      ...empty,
+      command: line.command,
+      rejectedTooLong: true,
+      failure: `the command is ${line.command.length} characters long, over the ${limits.maxCommandChars}-character limit`,
+    };
+  }
+
+  // One controller combines the request's cancellation with this command's
+  // own deadline, so the provider sees a single abort signal either way.
+  // `raceSignal` is unavailable on older runtimes, so forward by hand.
+  const deadline = new AbortController();
+  const abort = (): void => { deadline.abort(); };
+  if (signal.aborted) abort();
+  else signal.addEventListener('abort', abort, { once: true });
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    deadline.abort();
+  }, limits.timeoutMs);
 
   let handle;
   try {
@@ -124,13 +166,15 @@ export async function runShellLine(
       cwd,
       stdio: {
         stdin: 'ignore',
-        stdout: { maxBytes: MAX_OUTPUT_BYTES },
-        stderr: { maxBytes: MAX_OUTPUT_BYTES },
+        stdout: { maxBytes: limits.maxOutputBytes, spill: { maxBytes: limits.maxSpillBytes } },
+        stderr: { maxBytes: limits.maxOutputBytes, spill: { maxBytes: limits.maxSpillBytes } },
       },
-      graceMs: GRACE_MS,
-      signal,
+      graceMs: limits.graceMs,
+      signal: deadline.signal,
     });
   } catch (error) {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', abort);
     return {
       ...empty,
       command: line.command,
@@ -144,11 +188,19 @@ export async function runShellLine(
   try {
     outcome = await handle.done;
   } catch (error) {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', abort);
     return {
       ...empty,
       command: line.command,
       failure: error instanceof Error ? error.message : String(error),
     };
+  } finally {
+    // The deadline must not outlive the process: a fired timer on a finished
+    // command would abort a controller nobody reads, but leaving it armed for
+    // a long-lived turn is still a leak.
+    clearTimeout(timer);
+    signal.removeEventListener('abort', abort);
   }
 
   // Collect-mode readers are offset based and non-consuming, so reading once
@@ -162,7 +214,12 @@ export async function runShellLine(
     stderr: stderr?.text ?? '',
     exitCode: outcome.exitCode,
     signal: outcome.signal,
+    timedOut,
     truncated: (stdout?.lossy ?? false) || (stderr?.lossy ?? false),
+    spill: {
+      ...(stdout?.spillPath === undefined ? {} : { stdout: stdout.spillPath }),
+      ...(stderr?.spillPath === undefined ? {} : { stderr: stderr.spillPath }),
+    },
   };
 }
 
@@ -175,27 +232,57 @@ function shellPath(): string {
  * Render an outcome as the text a model reads inside the tool result.
  *
  * The command itself is echoed so the result stays self-describing once it is
- * far from the `!` line that produced it.
+ * far from the `!` line that produced it. The echo is elided for an over-long
+ * line: that outcome never ran anything, and repeating ten thousand characters
+ * to say "too long" would cost the very context the limit protects.
  *
  * @param outcome - the settled outcome.
  * @returns the model-facing text.
  */
 export function formatOutcome(outcome: ShellOutcome): string {
-  if (outcome.failure !== undefined) return `$ ${outcome.command ?? ''}\n${outcome.failure}`;
+  const echo = outcome.rejectedTooLong === true
+    ? `$ ${elide(outcome.command ?? '')}`
+    : `$ ${outcome.command ?? ''}`;
+  if (outcome.failure !== undefined) return `${echo}\n${outcome.failure}`;
 
-  const parts: string[] = [`$ ${outcome.command ?? ''}`];
+  const parts: string[] = [echo];
   if (outcome.stdout !== '') parts.push(outcome.stdout.replace(/\n$/, ''));
   if (outcome.stderr !== '') parts.push(`[stderr]\n${outcome.stderr.replace(/\n$/, '')}`);
-  if (outcome.truncated) parts.push('[output truncated]');
+  if (outcome.truncated) {
+    // A settled cap is only safe to mention when the full stream survived
+    // somewhere; otherwise the model would be told a gap it cannot recover.
+    const spilled = [outcome.spill.stdout, outcome.spill.stderr].filter((path): path is string => path !== undefined);
+    parts.push(spilled.length === 0
+      ? '[output truncated; the full stream was too large to keep]'
+      : `[output truncated; full stream: ${spilled.join(', ')}]`);
+  }
 
-  const status = outcome.signal !== null
-    ? `killed by ${outcome.signal}`
-    : `exit ${outcome.exitCode ?? 'unknown'}`;
+  // A timeout is classified from the caller's own deadline, not from the
+  // provider's outcome: the process group may report SIGTERM either way.
+  const status = outcome.timedOut === true
+    ? 'timed out and was terminated'
+    : outcome.signal !== null
+      ? `killed by ${outcome.signal}`
+      : `exit ${outcome.exitCode ?? 'unknown'}`;
   parts.push(`[${status}]`);
   return parts.join('\n');
 }
 
+/**
+ * Shorten a command for display without splitting a surrogate pair.
+ *
+ * @param command - the command text.
+ * @returns the command itself when short, else a head slice with an ellipsis.
+ */
+function elide(command: string): string {
+  const head = [...command].slice(0, 200).join('');
+  return command.length > 200 ? `${head}… (${command.length} characters)` : command;
+}
+
 /** Whether an outcome should be reported to the model as a tool error. */
 export function isFailed(outcome: ShellOutcome): boolean {
-  return outcome.failure !== undefined || outcome.signal !== null || (outcome.exitCode ?? 0) !== 0;
+  return outcome.failure !== undefined
+    || outcome.timedOut === true
+    || outcome.signal !== null
+    || (outcome.exitCode ?? 0) !== 0;
 }

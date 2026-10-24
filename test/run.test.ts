@@ -225,18 +225,24 @@ const teardowns: Array<() => void> = [];
 
 const locale = new FakeLocale();
 // Seed the shipped dictionaries the plugin is expected to cooperate with.
+// The annotation is what keeps the two dictionaries one type: without it
+// TypeScript infers a union of two object shapes, and a union whose members
+// differ in optional keys does not satisfy the `Record<string, string>` the
+// fake locale stores — `zh` has `placeholder.parentOffline`, `en` does not.
+const conversationZh: Record<string, string> = {
+  'placeholder.default': '发消息或创建任务, / 调用指令, @ 文件或对话',
+  'placeholder.hero': '描述你想要构建的内容, / 调用指令, @ 文件或对话',
+  'placeholder.parentOffline': '会话已离线',
+};
+const conversationEn: Record<string, string> = {
+  'placeholder.default': 'Message or run a task, / commands, @ files or sessions',
+  'placeholder.hero': 'Describe what you want to build, / commands, @ files or sessions',
+};
 locale.dicts.set(
   'conversation',
   new Map([
-    ['zh', {
-      'placeholder.default': '发消息或创建任务, / 调用指令, @ 文件或对话',
-      'placeholder.hero': '描述你想要构建的内容, / 调用指令, @ 文件或对话',
-      'placeholder.parentOffline': '会话已离线',
-    }],
-    ['en', {
-      'placeholder.default': 'Message or run a task, / commands, @ files or sessions',
-      'placeholder.hero': 'Describe what you want to build, / commands, @ files or sessions',
-    }],
+    ['zh', conversationZh],
+    ['en', conversationEn],
   ]),
 );
 
@@ -284,7 +290,11 @@ check('leaves other conversation keys alone', () => {
   assert.equal(locale.translate('conversation', 'placeholder.parentOffline'), '会话已离线');
 });
 check('leaves other namespaces alone', () => {
-  assert.equal(locale.translate('dsh-hint-shell', 'meta'), '输入框 shell 命令提示');
+  // This namespace is the plugin's own, so its own keys must resolve verbatim —
+  // patching the placeholder must not rewrite copy the plugin owns for other
+  // surfaces (the settings page reads the same dictionary).
+  assert.equal(locale.translate('dsh-hint-shell', 'idle'), '，输入 ! 执行 shell 命令');
+  assert.equal(locale.translate('dsh-hint-shell', 'armed'), '输入 shell 命令…');
 });
 check('does not double-append on repeat lookup', () => {
   const first = locale.translate('conversation', 'placeholder.default');

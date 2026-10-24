@@ -33,7 +33,7 @@
  * the composer already publishes, so no other plugin has to report it.
  */
 
-import { ARMED_HINT, DICTIONARY, IDLE_PHRASE, NS, textOf } from './copy.ts';
+import { NS, PACKAGE_NAME, en, text, zh } from './locales.ts';
 import type { ClientPluginContext, LocaleService } from './types.ts';
 
 /** The symbol this bundle claims. */
@@ -216,29 +216,20 @@ function apply(ctx: ClientPluginContext): void {
   const locale = ctx.locale;
   const t = locale.bind(NS);
 
-  /**
-   * Active language, narrowed to the two tags this bundle ships.
-   *
-   * @returns `en` for English locales, otherwise `zh`
-   */
-  const language = (): string => {
-    try {
-      return locale.getSnapshot().active.toLowerCase().startsWith('en') ? 'en' : 'zh';
-    } catch {
-      return 'zh';
-    }
-  };
-
   // Copy lives in this bundle's own namespace, so it can never collide.
-  ctx.effect(() => locale.register(NS, DICTIONARY), 'dsh-hint-shell: register copy');
+  // The hint strings and the settings page's copy share one namespace: the page
+  // is part of this plugin, and a translator edits one dictionary per language.
+  // Language selection is entirely the locale service's: `bind` already picks
+  // the active dictionary and falls back to `en`, so nothing here narrows tags.
+  ctx.effect(
+    () => locale.register(NS, { zh, en }),
+    'dsh-hint-shell: register copy',
+  );
 
   // Idle hint: append the clause inside the placeholder translation.
   ctx.effect(
     () =>
-      installPlaceholderClause(locale, () => {
-        const tag = language();
-        return textOf(t, 'idle', IDLE_PHRASE[tag] ?? IDLE_PHRASE['zh'] ?? '');
-      }),
+      installPlaceholderClause(locale, () => text(t, 'idle')),
     'dsh-hint-shell: append idle clause to the composer placeholder',
   );
 
@@ -250,8 +241,7 @@ function apply(ctx: ClientPluginContext): void {
    * sets, and nothing is inserted into the DOM.
    */
   const repaint = (): void => {
-    const tag = language();
-    const hint = textOf(t, 'armed', ARMED_HINT[tag] ?? ARMED_HINT['zh'] ?? '');
+    const hint = text(t, 'armed');
 
     const cards = document.querySelectorAll<HTMLElement>(`[${CARD_ATTR}]`);
     for (const card of Array.from(cards)) {
@@ -326,7 +316,120 @@ function apply(ctx: ClientPluginContext): void {
     };
   }, 'dsh-hint-shell: repaint on draft change');
 
+  installSettingsPage(ctx);
+
   emit('info', 'ready');
+}
+
+/**
+ * Register this plugin's settings page on the Plugins page.
+ *
+ * The page is optional furniture: a deployment that composes no Plugins page,
+ * or a test harness that supplies only the locale service, must still get the
+ * composer hints. The services are therefore read defensively, and the page is
+ * skipped — with one warning — rather than taking the hint surface down.
+ *
+ * The page module is also loaded lazily. It is JSX plus the React UI
+ * primitives, and this file must stay importable by a bare TypeScript runtime
+ * so the hint half can be unit-tested without a JSX transform or React
+ * installed. `import()` of a relative module is inlined by esbuild into the
+ * same single-file client bundle, so the shipped artifact keeps its shape.
+ *
+ * The entry appears only while the Host serves this plugin's namespace, which
+ * keeps a deployment that failed to mount the Host half from showing a form
+ * whose writes would go nowhere. The namespace is the profile entry id, so it
+ * matches the `id` this bundle's `cordis.patch.yml` row inserts.
+ *
+ * @param ctx - the Cordis client root context
+ */
+function installSettingsPage(ctx: ClientPluginContext): void {
+  const configForms = optionalService<ClientPluginContext['configForms']>(ctx, 'configForms');
+  const slots = optionalService<ClientPluginContext['slots']>(ctx, 'slots');
+  if (configForms === undefined || slots === undefined) {
+    emit('warn', 'settings page unavailable: no configForms/slots service');
+    return;
+  }
+
+  let page: Promise<SettingsPageModule> | undefined;
+  const loadPage = (): Promise<SettingsPageModule> => {
+    page ??= import('./settings-page.tsx') as Promise<SettingsPageModule>;
+    return page;
+  };
+
+  ctx.effect(
+    () =>
+      configForms.whileServed([NS], () =>
+        // The slot has to exist before its keyed entry can be registered; this
+        // is the same dependency the official pages declare.
+        slots.inject('plugins.row.config', () => {
+          let dispose: (() => void) | undefined;
+          let cancelled = false;
+          void loadPage()
+            .then((module) => {
+              if (cancelled) return;
+              dispose = module.mountSettingsPage({
+                configForms,
+                slots,
+                namespace: NS,
+                packageName: PACKAGE_NAME,
+                rowId: NS,
+              });
+            })
+            .catch((error: unknown) => {
+              emit('warn', `settings page failed to load: ${String(error)}`);
+            });
+          return () => {
+            cancelled = true;
+            dispose?.();
+          };
+        }),
+      ),
+    'dsh-hint-shell: settings page',
+  );
+}
+
+/** What the lazily loaded page module exposes. */
+interface SettingsPageModule {
+  /**
+   * Register the page's slot entry and return its disposer.
+   *
+   * @param options - the services the page binds, and its title
+   * @returns a disposer that releases the form and withdraws the entry
+   */
+  mountSettingsPage(options: {
+    configForms: ClientPluginContext['configForms'];
+    slots: ClientPluginContext['slots'];
+    namespace: string;
+    packageName: string;
+    rowId: string;
+  }): () => void;
+}
+
+/**
+ * Read an optional service without throwing.
+ *
+ * Cordis throws when a service is read as a bare property and is not composed;
+ * `ctx.get` is the sanctioned optional read. The structural context this file
+ * declares does not expose `get`, so the read is narrowed here rather than
+ * widening every caller.
+ *
+ * @param ctx - the Cordis client root context
+ * @param name - service key to read
+ * @returns the service, or undefined when it is not composed
+ */
+function optionalService<T>(ctx: ClientPluginContext, name: string): T | undefined {
+  const getter = (ctx as unknown as { get?: (key: string) => unknown }).get;
+  if (typeof getter !== 'function') {
+    // Not a Cordis context (a unit-test double, for instance): fall back to the
+    // property when the double defines one.
+    const direct = (ctx as unknown as Record<string, unknown>)[name];
+    return direct as T | undefined;
+  }
+  try {
+    return getter.call(ctx, name) as T | undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export const inject = ['locale'];

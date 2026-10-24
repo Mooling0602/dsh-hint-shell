@@ -2,5 +2,19 @@
   "meta": {
     "title": "Shell hint (dsh-hint-shell)",
     "description": "Adds \"type ! for shell commands\" to the empty composer placeholder and shows a gray hint once ! is typed."
-  }
+  },
+  "idle": ", type ! for shell commands",
+  "armed": "Enter a shell command…",
+  "title": "Shell hint",
+  "description": "Type ! in an empty composer to run a shell command, with a cap on how long a command may be.",
+  "maxCommandChars": "Command length cap (characters)",
+  "maxCommandCharsHint": "A command longer than this is refused outright and never runs.",
+  "overridden": "Overridden",
+  "reset": "Reset to default",
+  "readOnly": "This deployment stores settings read-only.",
+  "unavailable": "This plugin is not loaded, so it cannot be configured right now.",
+  "save": "Save",
+  "saving": "Saving…",
+  "saveFailed": "The deployment did not accept these values; they were left for you to correct.",
+  "invalidNumber": "Enter a number, or leave blank to use the default."
 }

@@ -50,6 +50,7 @@ import {
   type ShellOutcome,
   type SubprocessLike,
 } from './src/exec.ts';
+import { shellBudgetFrom, type Config, type ShellBudget } from './src/config.ts';
 import type {
   AgentLike,
   HostPluginContext,
@@ -75,14 +76,14 @@ export const inject = [];
 /** Tool name the recorded call uses, so the pair reads like a normal tool call. */
 export const TOOL_NAME = 'shell';
 
+/** Re-exported so the profile's configuration schema travels with the plugin. */
+export { Config, DEFAULT_MAX_COMMAND_CHARS, FALLBACK_TIMEOUT_MS, GRACE_MS, MAX_OUTPUT_BYTES } from './src/config.ts';
+
 /** Cap on how much of one command's output enters the log. */
 const MAX_LOGGED_CHARS = 30_000;
 
 /** Per-session turn counters, so an appended turn number stays monotonic. */
 const lastTurn = new WeakMap<SessionLike, number>();
-
-/** Process-local call counter. */
-let callSeq = 0;
 
 /** Turn/step the synthetic records belong to. */
 interface Position {
@@ -94,8 +95,9 @@ interface Position {
  * Install the `!` handler for every live agent.
  *
  * @param ctx - the plugin context; `subprocess` is available through `inject`.
+ * @param config - live configuration; limits are read per command.
  */
-export function apply(ctx: HostPluginContext): void {
+export function apply(ctx: HostPluginContext, config?: Config): void {
   ctx.on('agent/pre-step', async (payload, next) => {
     const line = lastShellLine(payload.messages);
     // Ordinary prose: leave the step completely untouched.
@@ -103,7 +105,7 @@ export function apply(ctx: HostPluginContext): void {
 
     const session = payload.agent.session;
     const position: Position = { turn: nextTurn(session, payload.turn), step: payload.step };
-    const outcome = await runLine(ctx, session, line, payload.signal);
+    const outcome = await runLine(ctx, session, line, payload.signal, config);
     const command = outcome.command ?? line.command;
     // Recording a `!` line must never leave the turn looking successful while
     // nothing was written: a session append that refuses rejects this turn with
@@ -161,6 +163,7 @@ function textOf(message: Message): string {
  * @param session - the session whose working directory the command uses.
  * @param line - the parsed shell line.
  * @param signal - cancellation owned by the submitting request.
+ * @param config - live configuration, read once for a consistent snapshot.
  * @returns the settled outcome.
  */
 async function runLine(
@@ -168,9 +171,11 @@ async function runLine(
   session: SessionLike,
   line: ShellLine,
   signal: AbortSignal,
+  config?: Config,
 ): Promise<ShellOutcome> {
   let cwd: string;
   let subprocess: SubprocessLike | undefined;
+  let budget: ShellBudget = {};
   try {
     // Read the services rather than inject them: `inject` would gate the plugin
     // on a working-directory provider, and reading a service as a bare property
@@ -179,13 +184,18 @@ async function runLine(
     // projection behind the service — so `ctx.get(...)` is the supported way in.
     cwd = ctx.get('workingDirectory')?.get(session) ?? process.cwd();
     subprocess = ctx.get('subprocess');
+    // The deadline and the output cap are the shell executor's, not this
+    // plugin's: a `!` line is a tool call, so it obeys the same budget the
+    // official bash tool does. A Host without the settings service leaves this
+    // empty and `readLimits` falls back to the executor's own defaults.
+    budget = shellBudgetFrom(ctx.get('settings')?.describe() ?? []);
   } catch (error) {
     return failedOutcome(line, `the session environment could not be resolved: ${detailOf(error)}`);
   }
 
   if (subprocess === undefined) return noSubprocess(line);
   try {
-    return await runShellLine(subprocess, line, cwd, signal);
+    return await runShellLine(subprocess, line, cwd, signal, config, budget);
   } catch (error) {
     // runShellLine already reports spawn and exit failures; this only catches a
     // provider that throws outside that seam. A failed command is still a result.
@@ -202,8 +212,25 @@ async function runLine(
  * @param outcome - the settled outcome.
  */
 function emitOutcome(session: SessionLike, position: Position, command: string, outcome: ShellOutcome): void {
-  emitPair(session, position, command, clamp(formatOutcome(outcome)), isFailed(outcome));
+  // Prefix after `clamp`: the attribution must survive truncation, and it must
+  // not consume the output budget a command's own result is entitled to.
+  emitPair(session, position, command, `${PROVENANCE}\n${clamp(formatOutcome(outcome))}`, isFailed(outcome));
 }
+
+/**
+ * Provenance line prefixed to every result this plugin writes.
+ *
+ * A `!` line becomes an ordinary tool call, and the wire format carries only the
+ * call's `type`/`id`/`name`/`input` — never the message `source`. So the model
+ * cannot otherwise tell this call apart from one it issued itself, and the
+ * record would read as its own action on the next request. This line is the only
+ * place in that record the model actually sees, which is why the attribution
+ * lives here rather than in the message `source`.
+ *
+ * It is prefixed after {@link clamp}, so it never spends the output budget and
+ * a truncated result still opens with it.
+ */
+const PROVENANCE = '[run by the user via `!` prompt symbol]';
 
 /**
  * Append the six records that make one `!` line a valid v4 tool exchange.
@@ -228,7 +255,9 @@ function emitPair(
   failed: boolean,
 ): void {
   const { turn, step } = position;
-  const callId = `dsh-hint-shell-${(callSeq += 1)}`;
+  // A counter would restart with the process and could hand a reopened session
+  // an id it already logged; a UUID is unique across restarts and forks.
+  const callId = `dsh-hint-shell-${randomUUID()}`;
   const argumentsText = JSON.stringify({ command });
 
   session.append('step/start', { turn, step });
@@ -324,6 +353,7 @@ function noSubprocess(line: ShellLine): ShellOutcome {
     exitCode: null,
     signal: null,
     truncated: false,
+    spill: {},
     failure: 'shell execution is unavailable: no `subprocess` provider is composed',
   };
 }
@@ -343,6 +373,7 @@ function failedOutcome(line: ShellLine, failure: string): ShellOutcome {
     exitCode: null,
     signal: null,
     truncated: false,
+    spill: {},
     failure,
   };
 }
@@ -377,12 +408,27 @@ function nextTurn(session: SessionLike, reported: number | undefined): number {
 /**
  * Clamp long output so one command cannot dominate a context.
  *
+ * The status line is reserved, not appended after the cut: `[exit N]` (or a
+ * timeout/kill reason) is the part a reader needs to judge the result, and a
+ * plain head slice over a large output used to drop it along with everything
+ * else. Cutting is also code-point aware, so an emoji or CJK extension
+ * character at the boundary is never split into a lone surrogate.
+ *
  * @param text - the formatted output.
  * @returns the text, truncated at {@link MAX_LOGGED_CHARS}.
  */
 function clamp(text: string): string {
   if (text.length <= MAX_LOGGED_CHARS) return text;
-  return `${text.slice(0, MAX_LOGGED_CHARS)}\n[output truncated at ${MAX_LOGGED_CHARS} characters]`;
+  const marker = `\n[output truncated at ${MAX_LOGGED_CHARS} characters]`;
+  // The formatted text always ends with its status line; keep it verbatim.
+  const statusAt = text.lastIndexOf('\n[');
+  const status = statusAt === -1 ? '' : text.slice(statusAt);
+  const room = MAX_LOGGED_CHARS - marker.length - status.length;
+  // A pathological status line could exceed the budget on its own; then the
+  // status wins and the body is dropped entirely rather than cut into it.
+  if (room <= 0) return `${status.slice(1)}${marker}`;
+  const head = [...text.slice(0, room)].join('');
+  return `${head}${marker}${status}`;
 }
 
 /** Re-exported for tests. */
