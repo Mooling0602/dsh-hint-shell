@@ -1,20 +1,6 @@
 {
   "meta": {
     "title": "Shell 提示 (dsh-hint-shell)",
-    "description": "在空输入框的占位文案后追加「输入 ! 执行 shell 命令」，输入 ! 后显示灰色提示「输入 shell 命令…」。"
-  },
-  "idle": "，输入 ! 执行 shell 命令",
-  "armed": "输入 shell 命令…",
-  "title": "Shell 提示",
-  "description": "在空输入框输入 ! 即可执行 shell 命令，并可调整命令长度上限。",
-  "maxCommandChars": "命令长度上限（字符）",
-  "maxCommandCharsHint": "超过此长度的命令会被直接拒绝，不会执行。",
-  "overridden": "已覆盖",
-  "reset": "恢复默认",
-  "readOnly": "此部署以只读方式存储设置。",
-  "unavailable": "该插件未加载，暂时无法配置。",
-  "save": "保存",
-  "saving": "保存中…",
-  "saveFailed": "该部署未接受这些值，已保留供你修改。",
-  "invalidNumber": "请输入数字，留空则使用默认值。"
+    "description": "把 ! 变成输入框里的 shell 前缀：直接执行命令并回显结果，同时提供命令长度上限配置。"
+  }
 }

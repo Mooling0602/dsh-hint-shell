@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "Composer hint for shell commands in DeepSeek Harness: appends \"type ! for shell commands\" to the empty composer placeholder and shows a gray hint once ! is typed.",
+  "description": "Makes ! a shell prefix in the DeepSeek Harness composer: runs the command in the session's working directory and records its output as a tool result, with a configurable command length cap.",
   "keywords": [
     "dsh",
     "deepseek-harness",
