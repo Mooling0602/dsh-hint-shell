@@ -2,181 +2,107 @@
 
 > **🌐 Language** · [English](README.md) | [中文（简体）](README.zh.md)
 
-A DeepSeek Harness plugin that makes `!` a shell prefix in the composer.
+Type `!` in the DeepSeek Harness composer and the rest of the line runs as a shell
+command, in the working directory of the session you are in.
 
-- **Empty composer** — appends `, type ! for shell commands` to the shipped
-  placeholder.
-- **After typing `!`** — shows a gray hint `Enter a shell command…` right after
-  the `!`.
-- **On submit** — a line like `!ls` runs as a real shell command in the session's
-  working directory. Its output is recorded in the session as a tool call and
-  result, so the next real request already sees it. **No model request is made
-  for the `!` line itself.**
-- **Settings** — one field on the plugin's row under Installed: the command
-  length cap. The shell's own timeout and output budget are *not* duplicated
-  here; they are read from the terminal plugin's page (see
-  [Limits](#limits)).
+It is the `!` of a terminal, moved into the chat box: no terminal window, no
+`bash` tool call of your own, and no model request spent on the command.
 
-Nothing else changes: no new button, no replaced component, no altered keyboard
-behaviour.
+## Features
 
-## `!` follows the same convention as `/`
+- **The composer tells you it is available.** An empty composer gains `, type !
+  for shell commands` after the shipped placeholder text, so `!` is discoverable
+  without documenting it separately.
+- **The hint appears as you type.** After a bare `!`, a gray `Enter a shell
+  command…` appears right behind it, and the moment you type real text the hint
+  disappears and gives the line back to you.
+- **The output goes into the chat.** `!ls` returns its output as a tool call and
+  result, so the next thing you ask the model about already includes it.
+  **No model request is spent on the `!` line itself.**
+- **Quoting, pipes, and globs behave as in a terminal.** The command runs through
+  `/bin/sh -c`, or `cmd.exe` on Windows.
+- **One setting.** The command length cap, on the plugin's own row under
+  Installed.
+- **Nothing else changes.** No new button, no replaced component, no altered
+  keyboard behaviour.
 
-The Harness treats a trigger symbol as a trigger only once something follows it:
-`parseCommand` requires at least one name character after `/`, and the
-composer's `matchEnter` bails when the token is empty. A lone `/` is therefore
-ordinary text, not a command.
+## Installation
 
-`!` behaves the same way. A lone `!` is prose and is sent to the model like any
-other message; only `!` with a command behind it is shell intent. Both `!ls` and
-`! ls` mean `ls`.
+In the Plugin page, choose **Add plugin**, then paste this repository address into
+the input field:
 
-## How it works
-
-The composer effects reuse machinery the shipped composer already has.
-
-**Idle hint** — the empty-composer placeholder is produced by a locale lookup of
-`conversation/placeholder.default`. `LocaleRuntime.prototype.translate` is a
-prototype method, so the plugin wraps it and appends one clause to that key (and
-to `placeholder.hero`, the same composer in its empty-session layout). Every
-other namespace and key passes through untouched.
-
-**Armed hint** — the shipped stylesheet already paints this exact kind of
-message:
-
-```css
-.input p:last-child::after {
-  content: var(--dsh-composer-hint);
-  color: var(--dsw-alias-label-caption);
-}
+```
+https://github.com/Mooling0602/dsh-hint-shell
 ```
 
-Upstream only populates that property for a native command claim, which a `!`
-prefix cannot produce. Custom properties inherit, so setting
-`--dsh-composer-hint` on the composer card is enough: the shipped rule then
-draws the text immediately after the typed `!`, in the shipped caption colour.
-The plugin adds no DOM, does no measurement, and does no positioning.
+This repository ships its build output (`index.js`, `client.js`), so a plain Git
+address is enough and there is no build step to wait for. Restart DSH after it
+installs.
 
-The draft itself comes from `[data-composer-input]`, the editable surface the
-composer already publishes, so this plugin has no companion plugin and no
-dependency on internal trigger internals.
+The same thing from the command line, for scripted setups:
 
-## Copy
+```sh
+dsh plugin --profile web add https://github.com/Mooling0602/dsh-hint-shell
+```
 
-Copy lives in the plugin's own `dsh-hint-shell` locale namespace, so registration
-can never collide. The locale service's `register` is append-only and throws on a
-duplicate `(namespace, locale)` pair, which is why overriding the `conversation`
-namespace from a plugin is not possible.
+To update, repeat the same installation with the latest commit. `dsh plugin`
+forwards to pnpm inside the profile directory, so never edit
+`~/.dsh/profiles/web/node_modules` by hand: the next pnpm operation overwrites it.
 
-| Key | zh | en |
-|---|---|---|
-| `idle` | `，输入 ! 执行 shell 命令` | `, type ! for shell commands` |
-| `armed` | `输入 shell 命令…` | `Enter a shell command…` |
+## Usage
 
-These two are only half the picture: the settings page renders its own labels
-from the same namespace. All runtime strings are TypeScript constants in
-`src/locales.ts`, because the locale service takes dictionaries by value and
-nothing in the client bundle reads a JSON file at runtime. The `locale/*.json`
-files hold only `meta`, which the plugin listing reads through the Host — the
-same split the shipped packages use.
+1. Make sure the composer is empty.
+2. Type `!` and keep typing the command, for example `!ls`, or `!git status`.
+   The hint confirms that the `!` was recognised.
+3. Press Enter.
 
-## Execution
+The output is shown in the conversation, and the model can see the command and
+its result in the next request you send.
 
-The host half hooks `agent/pre-step`, the last point before the loop dispatches a
-request, and its `reject` decision stops that request. A `!` line therefore costs
-zero tokens.
+## When `!` is a shell prefix and when it is not
 
-Recording the outcome needs a whole tool exchange, not one event. The
-model-visible surface carries `tool/result` but not `tool/call`, and a tool
-result with no preceding assistant `tool-call` block is a message answering a
-call that was never made — which a provider rejects. The records are written the
-way the agent loop writes its own, and in the shape the session's format v4
-reader validates when the session is reopened:
+`!` is shell intent only when a command follows it on the same line, following
+the same rule the composer already applies to `/`:
 
-1. `step/start` — `agent/pre-step` runs *before* the loop opens its step, and v4
-   requires every surface message to belong to an open step. The plugin opens one
-   for the pair.
-2. `system/message` with empty content — only when the surface is still empty. V4
-   protects the first system message as the surface head, and a later
-   `system/message` cannot be appended without one. A `!` line can be the first
-   thing a session ever does, so the head is reserved; empty content derives to no
-   model message and renders no transcript row.
-3. `assistant/message` carrying the `tool-call` block (surface event, identified
-   message)
-4. `tool/call` (log-only, for the UI and replay)
-5. `tool/result` (surface event: an identified tool-role message whose
-   `source.callId` matches its `toolCallId`, citing the `tool/call` seq as its
-   source event)
-6. `step/end` — closes the synthetic step so the loop's `turn/end` stays legal
+| You type | What happens |
+| --- | --- |
+| `!ls` | Runs `ls`. |
+| `! ls` | Runs `ls`. The space is ignored. |
+| `!` alone | Ordinary text, sent to the model as prose. |
+| `hello !world` | Ordinary text. A `!` in the middle of a sentence is not a trigger. |
 
-Every message carries a fresh UUID `id` and a producer-owned `source.kind`, which
-is what the v4 reader checks on reopen. Omitting any of this is not a cosmetic
-problem: the live append succeeds, then the persistence encoder refuses the row,
-the buffered batch never reaches the log, and the turn fails with a format error
-such as `format v4 tool/result at seq 8 requires a first-class message with a
-string id`.
+A line that exceeds the command length cap is refused before it runs.
 
-Because these are appends to the durable log and the step was rejected, the
-command's output sits in the history for the *next* request without one being
-made for it.
+## Limits
 
-Commands run through `/bin/sh -c` (`cmd.exe` on Windows), so quoting, pipes, and
-globs behave as in a terminal rather than being re-implemented.
+A `!` command obeys the same budget as the official `bash` tool, because it is
+transcribed into an ordinary tool call. The plugin reads that budget from the
+terminal plugin's own settings page at command time, so a timeout you tighten
+there applies to the next `!` command without a restart:
 
-`subprocess` is read optionally rather than declared in `inject`: a hard
-dependency would make Cordis refuse to mount the whole plugin when no provider is
-composed, taking the composer hints down with it. Without a provider the hints
-still work and a `!` line records a tool error naming the missing service.
+| Field | Where it comes from |
+| --- | --- |
+| `timeoutMs` | the terminal plugin's page (`bash-sandbox`, or `pwsh-sandbox` on Windows) |
+| `maxOutputBytes` | the same page |
+| `maxCommandChars` | this plugin's own setting, default `10_000` characters |
+| logged output | capped at `30_000` characters on the way into the session log |
 
-## Result provenance
+The length cap is the plugin's own because an ordinary tool call has none to
+inherit: the model writes the command into the request, so an unbounded line
+would be sent twice, once as the argument and once as the result's echo.
 
-Every result opens with this line:
+## What the model sees
+
+A `!` result opens with this line:
 
 ```
 [run by the user via `!` prompt symbol]
 ```
 
-It exists because the model would otherwise have no way to know who ran the
-command. The wire format carries only a tool call's `type`, `id`, `name`, and
-`input` — never the message `source` — and v4 *requires* an assistant message to
-claim a model source. So the tool call this plugin synthesizes is
-indistinguishable, to the model, from one it issued itself, and a later turn
-would read the record as its own prior action.
-
-The result text is the only part of that exchange the model actually receives,
-which is why the attribution lives there rather than in the message metadata. It
-is prefixed after truncation, so it survives a cut and spends no output budget;
-backticks keep `!` from reading as punctuation.
-
-This is a hint, not an isolation boundary: the call/result pairing is still
-structurally indistinguishable. It tells the model what happened rather than
-forcing it to conclude otherwise.
-
-## Limits
-
-A `!` line becomes an ordinary tool call, so it obeys the same budget the
-official `bash` tool does. The plugin reads that budget at command time from the
-terminal plugin's own settings entry — `bash-sandbox`, or `pwsh-sandbox` on
-Windows — instead of deciding a second time:
-
-| Limit | Source | Fallback |
-|---|---|---|
-| `timeoutMs` | terminal plugin page | `120_000` (`bash-local`'s default) |
-| `maxOutputBytes` | terminal plugin page | `64_000` |
-
-A second surface for a number that already has one is how the two drift apart,
-and a user who tightened the terminal timeout expects every `!` command to obey
-it. Reading live means a settings change applies to the next command, with no
-restart.
-
-Two limits are deliberately the plugin's own, because no official counterpart
-exists to inherit:
-
-- **`maxCommandChars`** (default `10_000`) — an ordinary tool call has no such
-  limit. The model writes the command into `tool-call.arguments`, so an unbounded
-  line would enter the next request twice over: once as the argument and once as
-  the result's echo.
-- **Logged output** — capped at `30_000` characters on the way into the log.
+The wire format does not carry who ran a command, so without it the model would
+read the record as a call it made itself. The line is a hint about provenance, not
+an isolation boundary; it tells the model what happened instead of leaving it to
+guess.
 
 ## Development
 
@@ -189,19 +115,46 @@ npm run build        # src/ -> client.js, host.ts -> index.js
 npm test             # composer, shell-line, and installed-Harness format tests
 ```
 
-`test/dsh-format.test.ts` drives the host hook against an installed Harness: it
-appends through a real `Session`, then encodes, admits, and restores the log
-through the real format v4 reader, so a record shape the live app accepts but
-cannot re-open fails the suite. It resolves the harness packages from the host
-installation — `DSH_MODULES`, the global `npm root -g` layout, or the checkout
-behind the `dsh` launcher on `PATH` — and reports a skip when none of them is
-available.
+`npm run build` is deterministic: on an unchanged tree it leaves `git status`
+clean. A dirty rebuild means the sources and the committed bundles had already
+drifted. Commit regenerated bundles with the source change that caused them.
 
-`client.js` must stay a single self-contained file: the Client module loader's
-`require` resolves host packages only and cannot resolve relative imports, which
-is why the build bundles `src/` rather than shipping it. `index.js` is built
-rather than shipping `.ts` so the host never depends on the runtime having
-TypeScript stripping enabled.
+`test/dsh-format.test.ts` drives the host hook against an installed Harness. It
+resolves the Harness packages from the host installation, and reports a skip when
+none is available.
+
+### Implementation notes
+
+The composer half reuses machinery the shipped composer already has, so the plugin
+adds no DOM, does no measurement, and does no positioning:
+
+- **Idle hint.** `LocaleRuntime.prototype.translate` is wrapped, appending one
+  clause to `conversation/placeholder.default` and `placeholder.hero`. Every other
+  key passes through untouched, and uninstalling restores the original method.
+- **Armed hint.** The shipped stylesheet already paints this kind of message
+  through `--dsh-composer-hint`. Custom properties inherit, so setting that
+  property on the composer card is enough for the existing rule to draw the text
+  behind the typed `!`, in the shipped caption colour.
+- **Draft reading.** The draft comes from `[data-composer-input]`, the editable
+  surface the composer already publishes. Because Lexical commits typed text
+  inside its own update pass, which is not guaranteed to finish before `input`
+  fires, the plugin repaints on the mutation Lexical makes and keeps a deferred
+  `input` read as a safety net.
+- **Copy.** Strings live in the plugin's own `dsh-hint-shell` locale namespace, in
+  `src/locales.ts`, in both languages. `locale/*.json` hold only `meta`, which the
+  plugin listing reads through the Host.
+
+The host half hooks `agent/pre-step`, the last point before the loop dispatches a
+request, and its `reject` decision is what makes a `!` line cost zero tokens. The
+outcome is recorded as a whole tool exchange rather than a single event, because a
+tool result with no preceding `tool-call` is a message answering a call that was
+never made, which a provider rejects. The records are written in the shape the
+session's format v4 reader validates on reopen; the live append would succeed
+even for a row that cannot be reopened, which is what the format test guards.
+
+`subprocess` is read optionally rather than declared in `inject`, so the composer
+hints keep working even when no provider is composed; only execution degrades, and
+a `!` line then records a tool error naming the missing service.
 
 ## Layout
 
@@ -224,34 +177,10 @@ TypeScript stripping enabled.
 | `test/dsh-format.test.ts` | Installed-Harness test: append through a real Session, then reopen the log through the real v4 reader. |
 | `cordis.patch.yml` | Profile bundle row. |
 
-## Behaviour notes
-
-- The hint shows only while the draft is the bare `!`; typing a command clears
-  it. No space is needed after the `!`.
-- The hint never shows on an empty composer (the placeholder covers that case) or
-  in the middle of a sentence (`hello !world` is ordinary text).
-- The hint follows the active locale; switching language re-renders it.
-- Uninstalling restores the original `translate`.
-
-### Why a MutationObserver is involved
-
-The editable surface belongs to Lexical, which commits typed text into its own
-paragraph nodes inside its update pass. That pass is not guaranteed to finish
-before the browser dispatches `input`, so a synchronous read of
-`[data-composer-input]` can still describe the *previous* character. Reading only
-on `input` made a bare `!` appear one keystroke late — it showed up after the
-space that followed, and then appeared to "stick" when the draft was deleted back
-to `!`.
-
-The plugin therefore repaints on the mutation Lexical actually makes, which is
-the authoritative signal that the text is in the DOM. A deferred read on `input`
-remains as a safety net. Both paths only schedule a paint, so an extra paint is
-cheap and idempotent.
-
 ## Settings page placement
 
 The entry is registered on `plugins.row.config`, keyed
-`dsh-hint-shell#dsh-hint-shell`, rather than on `plugins.item`. That is not a
-cosmetic choice: `plugins.item` *is* the Official group's slot, so registering
-there lists a third-party bundle's configuration among the built-in plugins. The
-row-config slot is the one meant for an installed package's own row.
+`dsh-hint-shell#dsh-hint-shell`, rather than on `plugins.item`. `plugins.item` *is*
+the Official group's slot, so registering there lists a third-party bundle's
+configuration among the built-in plugins; the row-config slot is the one meant for
+an installed package's own row.
