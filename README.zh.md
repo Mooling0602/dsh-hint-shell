@@ -1,5 +1,7 @@
 # dsh-hint-shell
 
+> **🌐 语言切换** · [English](README.md) | [中文（简体）](README.zh.md)
+
 一个 DeepSeek Harness 插件，让 `!` 成为输入框里的 shell 前缀。
 
 - **空输入框** — 在原有占位文案后追加 `，输入 ! 执行 shell 命令`。

@@ -1,5 +1,7 @@
 # dsh-hint-shell
 
+> **🌐 Language** · [English](README.md) | [中文（简体）](README.zh.md)
+
 A DeepSeek Harness plugin that makes `!` a shell prefix in the composer.
 
 - **Empty composer** — appends `, type ! for shell commands` to the shipped
