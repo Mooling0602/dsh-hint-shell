@@ -280,11 +280,11 @@ console.log('\n[1] idle hint — placeholder translation');
 check('declares locale injection', () => assert.deepEqual(inject, ['locale']));
 check('appends clause to placeholder.default (zh)', () => {
   const value = locale.translate('conversation', 'placeholder.default');
-  assert.equal(value, '发消息或创建任务, / 调用指令, @ 文件或对话，输入 ! 执行 shell 命令');
+  assert.equal(value, '发消息或创建任务, / 调用指令, @ 文件或对话, 输入 ! 执行 shell 命令');
 });
 check('appends clause to placeholder.hero (zh)', () => {
   const value = locale.translate('conversation', 'placeholder.hero');
-  assert.equal(value, '描述你想要构建的内容, / 调用指令, @ 文件或对话，输入 ! 执行 shell 命令');
+  assert.equal(value, '描述你想要构建的内容, / 调用指令, @ 文件或对话, 输入 ! 执行 shell 命令');
 });
 check('leaves other conversation keys alone', () => {
   assert.equal(locale.translate('conversation', 'placeholder.parentOffline'), '会话已离线');
@@ -293,7 +293,7 @@ check('leaves other namespaces alone', () => {
   // This namespace is the plugin's own, so its own keys must resolve verbatim —
   // patching the placeholder must not rewrite copy the plugin owns for other
   // surfaces (the settings page reads the same dictionary).
-  assert.equal(locale.translate('dsh-hint-shell', 'idle'), '，输入 ! 执行 shell 命令');
+  assert.equal(locale.translate('dsh-hint-shell', 'idle'), ', 输入 ! 执行 shell 命令');
   assert.equal(locale.translate('dsh-hint-shell', 'armed'), '输入 shell 命令…');
 });
 check('does not double-append on repeat lookup', () => {

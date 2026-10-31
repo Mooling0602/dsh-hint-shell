@@ -68,7 +68,7 @@ export const zh: Record<HintLocaleKey, string> = {
   saving: '保存中…',
   saveFailed: '该部署未接受这些值，已保留供你修改。',
   invalidNumber: '请输入数字，留空则使用默认值。',
-  idle: '，输入 ! 执行 shell 命令',
+  idle: ', 输入 ! 执行 shell 命令',
   armed: '输入 shell 命令…',
 };
 
