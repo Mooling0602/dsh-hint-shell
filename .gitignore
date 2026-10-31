@@ -1,9 +1,12 @@
 # Installed development dependencies (npm install).
 node_modules/
 
+# Build output: npm run build regenerates dist/. It is git-ignored and ships
+# only inside the release tarball, never from the git tree.
+dist/
+
 # Local analysis/scratch output.
 .scratch/
-dist/
 
 # Packed releases.
 *.tgz

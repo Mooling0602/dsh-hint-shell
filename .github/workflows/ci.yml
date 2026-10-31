@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # dist/ is git-ignored build output, so the build must write nothing that
+      # git tracks. Anything it does modify means a generated file leaked into
+      # the tree and the release tarball would no longer be the single source of
+      # the shipped bundles.
+      - name: Build and verify only generated files changed
+        run: |
+          npm run build
+          if [ -n "$(git status --porcelain)" ]; then
+            echo '::error::npm run build changed tracked files; dist/ must stay untracked'
+            git status --short
+            git --no-pager diff --stat
+            exit 1
+          fi
+
+      - name: Pack check
+        run: |
+          npm pack --silent > /dev/null
+          tar -tzf ./*.tgz | sort > pack-contents.txt
+          cat pack-contents.txt
+          for required in \
+            package/package.json \
+            package/dist/index.js \
+            package/dist/client.js \
+            package/cordis.patch.yml \
+            package/locale/en.json \
+            package/locale/zh.json \
+            package/icon.svg; do
+            if ! grep -qx "$required" pack-contents.txt; then
+              echo "::error::the tarball is missing $required"
+              exit 1
+            fi
+          done

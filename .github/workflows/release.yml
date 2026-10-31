@@ -1,0 +1,257 @@
+# .github/workflows/release.yml — publish a release from a bare version tag.
+#
+# Push a bare version tag — `<package.json version>` without a `v` prefix, for
+# example `0.1.0` — and this workflow runs the full gate, packs the tarball and
+# creates a GitHub Release titled `v<version>` whose body is composed from
+# CHANGELOG.md (global Header + the `## <version>` section + global Endfix, with
+# the Full Changelog compare link generated from the previous release tag).
+#
+# The repository commits no build output: `dist/` is git-ignored, so the packed
+# tarball is the installable artifact. A release therefore ships a ready-to-use
+# plugin without a build step on the user's machine.
+name: Release
+
+on:
+  push:
+    tags:
+      # Bare versions only: `0.1.0`. The v prefix belongs to the release commit
+      # subject and to the GitHub Release title, not to the tag.
+      - "[0-9]*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing bare version tag to release (for example 0.1.0)"
+        required: true
+        type: string
+      dry_run:
+        description: "Run the checks and build the tarball without creating a release"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release ${{ inputs.tag || github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Validate the tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${TAG}"
+          version="${tag}"
+          pkg_version="$(node -p "require('./package.json').version")"
+
+          if [[ "${tag}" == v* ]]; then
+            echo "::error::release tags are bare versions (for example 0.1.0); the v prefix belongs to the release commit subject and the Release title"
+            exit 1
+          fi
+
+          if [ "${version}" != "${pkg_version}" ]; then
+            echo "::error::tag ${tag} does not match the package.json version ${pkg_version}"
+            exit 1
+          fi
+
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::${version} is not a valid semantic version"
+            exit 1
+          fi
+
+          expected_subject="release: v${version}"
+          actual_subject="$(git log -1 --format=%s HEAD)"
+          if [ "${actual_subject}" != "${expected_subject}" ]; then
+            echo "::error::the release commit subject must be '${expected_subject}' (found '${actual_subject}')"
+            exit 1
+          fi
+
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "::error::${tag} is not reachable from main"
+            exit 1
+          fi
+
+          if [[ "${version}" == *-* ]]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
+
+          {
+            echo "version=${version}"
+            echo "prerelease=${prerelease}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "tag ${tag}: version ${version}, prerelease=${prerelease}"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify the build only writes generated files
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::the build changed tracked files; dist/ must stay untracked"
+            git status --short
+            git --no-pager diff --stat
+            exit 1
+          fi
+
+      - name: Compose the release notes from CHANGELOG.md
+        id: notes
+        shell: bash
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          notes_file="${RUNNER_TEMP}/release-notes.md"
+          node .github/scripts/release-notes.mjs "${{ steps.version.outputs.version }}" "${notes_file}"
+          echo "notes_file=${notes_file}" >> "${GITHUB_OUTPUT}"
+          echo "--- release notes ---"
+          cat "${notes_file}"
+
+      - name: Pack the release tarball
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f ./*.tgz
+          npm pack --silent > /dev/null
+          tarball="$(ls -1 ./*.tgz | head -n 1)"
+          echo "tarball=${tarball}" >> "${GITHUB_OUTPUT}"
+          tar -tzf "${tarball}" | sort > pack-contents.txt
+          cat pack-contents.txt
+          for required in \
+            package/package.json \
+            package/dist/index.js \
+            package/dist/client.js \
+            package/cordis.patch.yml \
+            package/locale/en.json \
+            package/locale/zh.json \
+            package/icon.svg; do
+            if ! grep -qx "${required}" pack-contents.txt; then
+              echo "::error::tarball ${tarball} is missing ${required}"
+              exit 1
+            fi
+          done
+
+      - name: Upload the tarball as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-hint-shell-${{ steps.version.outputs.version }}
+          path: ${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+
+      - name: Create the GitHub release
+        id: gh_release
+        if: ${{ env.DRY_RUN != 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${TAG}"
+          version="${{ steps.version.outputs.version }}"
+          release_title="v${version}"
+          tarball="${{ steps.pack.outputs.tarball }}"
+          notes_file="${{ steps.notes.outputs.notes_file }}"
+          prerelease="${{ steps.version.outputs.prerelease }}"
+
+          if gh release view "${tag}" > /dev/null 2>&1; then
+            immutable="$(gh release view "${tag}" --json isImmutable --jq '.isImmutable')"
+            if [ "${immutable}" = "true" ]; then
+              expected_asset="$(basename "${tarball}")"
+              published_assets="$(gh release view "${tag}" --json assets --jq '.assets[].name')"
+              if ! printf '%s\n' "${published_assets}" | grep -x "${expected_asset}" > /dev/null; then
+                echo "::error::immutable release ${tag} is missing ${expected_asset}; bump the version and publish a new release"
+                exit 1
+              fi
+              echo "release ${tag} is immutable; keeping its assets and refreshing the title and notes"
+              if [ "${prerelease}" = "true" ]; then
+                gh release edit "${tag}" --title "${release_title}" --notes-file "${notes_file}" --prerelease
+              else
+                gh release edit "${tag}" --title "${release_title}" --notes-file "${notes_file}" --latest
+              fi
+              echo "release_status=existing immutable (assets kept)" >> "${GITHUB_OUTPUT}"
+            else
+              echo "release ${tag} already exists; refreshing its tarball and notes"
+              gh release upload "${tag}" "${tarball}" --clobber
+              if [ "${prerelease}" = "true" ]; then
+                gh release edit "${tag}" --title "${release_title}" --notes-file "${notes_file}" --prerelease
+              else
+                gh release edit "${tag}" --title "${release_title}" --notes-file "${notes_file}" --latest
+              fi
+              echo "release_status=updated" >> "${GITHUB_OUTPUT}"
+            fi
+          elif [ "${prerelease}" = "true" ]; then
+            gh release create "${tag}" "${tarball}" \
+              --verify-tag \
+              --title "${release_title}" \
+              --notes-file "${notes_file}" \
+              --prerelease
+            echo "release_status=created (pre-release)" >> "${GITHUB_OUTPUT}"
+          else
+            gh release create "${tag}" "${tarball}" \
+              --verify-tag \
+              --title "${release_title}" \
+              --notes-file "${notes_file}" \
+              --latest
+            echo "release_status=created" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Summarize
+        if: ${{ always() && !cancelled() }}
+        shell: bash
+        run: |
+          {
+            echo "### Release ${TAG}"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| version | `${{ steps.version.outputs.version }}` |"
+            echo "| pre-release | `${{ steps.version.outputs.prerelease }}` |"
+            echo "| GitHub Release | ${{ steps.gh_release.outputs.release_status || 'not created' }} |"
+            echo "| tarball | `${{ steps.pack.outputs.tarball }}` |"
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo ""
+              echo "> Dry run: no GitHub Release was created."
+            else
+              echo ""
+              echo "Install this build:"
+              echo ""
+              echo '```bash'
+              echo "dsh plugin --profile web add https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/$(basename "${{ steps.pack.outputs.tarball }}")"
+              echo '```'
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"

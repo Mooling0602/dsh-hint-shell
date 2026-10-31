@@ -8,7 +8,7 @@
 
 ## 功能
 
-- **输入框会告诉你它可用。** 空输入框在原占位文案后追加 `，输入 ! 执行 shell 命令`，因此不用额外写文档说明，`!` 也能被发现。
+- **输入框会告诉你它可用。** 空输入框在原占位文案后追加 `, 输入 ! 执行 shell 命令`，因此不用额外写文档说明，`!` 也能被发现。
 - **打字时就有提示。** 只打了一个 `!` 时，紧跟其后出现灰色提示 `输入 shell 命令…`；一旦你开始输入真正的命令内容，提示就消失，把这一行交还给你。
 - **输出进入对话。** `!ls` 的结果以工具调用与工具结果的形式出现，所以你下一次问模型的内容里已经包含了它。**`!` 这一行本身不消耗任何模型请求。**
 - **引号、管道和通配符与终端一致。** 命令通过 `/bin/sh -c` 执行，Windows 上为 `cmd.exe`。
@@ -17,21 +17,32 @@
 
 ## 安装
 
-在插件页选择 **添加插件**，把本仓库地址粘贴进输入框即可：
+本仓库**只发布源码**：`dist/` 是被 git 忽略的构建产物，因此 Git 检出里没有 Harness 能加载的文件。可安装的产物是挂在 GitHub Release 上的 tarball，它已经构建好了：
+
+在插件页选择 **添加插件**，粘贴你要安装的版本的发布资源地址：
 
 ```text
-https://github.com/Mooling0602/dsh-hint-shell
+https://github.com/Mooling0602/dsh-hint-shell/releases/download/0.1.0/dsh-hint-shell-0.1.0.tgz
 ```
 
-本仓库直接发布构建产物（`index.js`、`client.js`），因此普通的 Git 地址就够了，安装时无需等待构建。安装完成后重启 DSH。
+下载到本地的资源同样可用，填它的本地路径即可（`./dsh-hint-shell-<version>.tgz`）。安装完成后重启 DSH。
 
 同样的操作，命令行形式，供脚本化场景使用：
 
 ```sh
-dsh plugin --profile web add https://github.com/Mooling0602/dsh-hint-shell
+dsh plugin --profile web add \
+  https://github.com/Mooling0602/dsh-hint-shell/releases/download/0.1.0/dsh-hint-shell-0.1.0.tgz
 ```
 
-更新时，用最新提交重复一次同样的安装即可。`dsh plugin` 会把参数转发给 profile 目录里的 pnpm，因此不要手动改动 `~/.dsh/profiles/web/node_modules`：下一次 pnpm 操作会覆盖它。
+Git 地址也能用，因为 `package.json` 会在安装时通过 `prepare` 脚本构建：
+
+```sh
+dsh plugin --profile web add github:Mooling0602/dsh-hint-shell
+```
+
+这条通道需要 Node `^22.19.0 || >=24.0.0`，并且多一步构建；pnpm 默认会拦截构建脚本，需要在 profile 的 `pnpm-workspace.yaml` 里允许 pnpm 打印出的那个 key（`allowBuilds`）后重跑，或安装时加一次 `--allow-build`。
+
+更新时，用新版本的发布资源重复一次同样的安装。tarball 地址会被固定在 profile 清单里，因此换版本需要先 `remove` 再 `add`。`dsh plugin` 会把参数转发给 profile 目录里的 pnpm，因此不要手动改动 `~/.dsh/profiles/web/node_modules`：下一次 pnpm 操作会覆盖它。
 
 ## 使用
 
@@ -84,11 +95,11 @@ dsh plugin --profile web add https://github.com/Mooling0602/dsh-hint-shell
 ```sh
 npm install          # typescript + esbuild + @types/react + react
 npm run typecheck    # tsc --noEmit
-npm run build        # src/ -> client.js, host.ts -> index.js
+npm run build        # src/ -> dist/client.js, host.ts -> dist/index.js
 npm test             # 输入框、shell 行，以及针对已安装 Harness 的格式测试
 ```
 
-`npm run build` 是确定性的：在未改动的树上运行后 `git status` 保持干净。若重新构建产生了改动，说明源码与已提交的产物此前已经不一致。重新生成的产物应与引起它的源码改动一起提交。
+`dist/` 不提交：构建只写入这个被 git 忽略的目录，因此重新构建永远不会弄脏工作树。发布的产物来自 release tarball，由发布工作流在该 tag 上全新构建并打包。
 
 `test/dsh-format.test.ts` 针对已安装的 Harness 驱动 Host 钩子。它从宿主安装解析 Harness 包，都找不到时报告跳过。
 
@@ -110,8 +121,10 @@ Host 部分挂载 `agent/pre-step`，即主循环派发请求前的最后一个�
 | 路径 | 用途 |
 | --- | --- |
 | `host.ts` | Host 部分：`!` 的 pre-step 钩子、记录配对与来源标注（源码）。 |
-| `index.js` | 生成的 Host 模块。请勿编辑。 |
-| `client.js` | 生成的客户端 bundle。请勿编辑。 |
+| `dist/index.js` | 生成的 Host 模块，被 git 忽略。请勿编辑。 |
+| `dist/client.js` | 生成的客户端 bundle，被 git 忽略。请勿编辑。 |
+| `build.mjs` | 把 `src/` 打包进 `dist/`。 |
+| `PUBLISHING.md` | 发布、安装与更新通道。 |
 | `src/config.ts` | `Config` schema，以及从终端条目读取的限制。 |
 | `src/exec.ts` | shell 行解析、执行与输出格式化。 |
 | `src/locales.ts` | 全部运行时字符串，双语。 |

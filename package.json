@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
+  "main": "dist/index.js",
   "description": "Makes ! a shell prefix in the DeepSeek Harness composer: runs the command in the session's working directory and records its output as a tool result, with a configurable command length cap.",
   "keywords": [
     "dsh",
@@ -16,22 +17,32 @@
   "license": "MIT",
   "icon": "icon.svg",
   "exports": {
-    ".": "./index.js",
-    "./client": "./client.js",
+    ".": {
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "default": "./dist/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
   },
   "files": [
-    "index.js",
-    "client.js",
+    "dist",
     "cordis.patch.yml",
     "locale/*.json",
-    "icon.svg"
+    "icon.svg",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node test/run.test.ts && node test/host.test.ts && node test/dsh-format.test.ts"
+    "test": "node test/run.test.ts && node test/host.test.ts && node test/dsh-format.test.ts",
+    "prepare": "node build.mjs",
+    "prepublishOnly": "node build.mjs"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

@@ -5,7 +5,10 @@
  * `window.__ModuleLoader__.load({ id, factory(require) })` hands the plugin a
  * `require` that resolves *host* packages only; it cannot resolve relative
  * module specifiers. The Client bundle must therefore be one self-contained
- * file, which is what this script produces from `src/`.
+ * file, which is what this script produces from `src/` into `dist/`.
+ *
+ * `dist/` is git-ignored build output: the repository ships sources only, and
+ * the built files travel inside the release tarball (see PUBLISHING.md).
  *
  * Package name, module id, and bundle global are read from package.json so the
  * script stays identical across plugins.
@@ -14,7 +17,7 @@
  */
 
 import { build } from 'esbuild';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,13 +31,14 @@ if (typeof name !== 'string' || name.length === 0) {
 }
 
 const entry = resolve(here, 'src/index.ts');
-const outfile = resolve(here, 'client.js');
+const outDir = resolve(here, 'dist');
+const outfile = resolve(outDir, 'client.js');
 
 // The Host half is plain ESM evaluated by the Host process, not by the browser
 // loader. It is built separately (rather than importing .ts directly) so the
 // shipped file never depends on the runtime having TypeScript stripping enabled.
 const hostEntry = resolve(here, 'host.ts');
-const hostOutfile = resolve(here, 'index.js');
+const hostOutfile = resolve(outDir, 'index.js');
 
 // The IIFE global is derived from the package name so no two plugins collide if
 // the host ever evaluates two bundles in one realm.
@@ -94,6 +98,7 @@ ${indented}
 });
 `;
 
+await mkdir(outDir, { recursive: true });
 await writeFile(outfile, wrapped, 'utf8');
 
 // Fail loudly if the wrapper ever regresses.
@@ -101,7 +106,7 @@ if (!wrapped.includes('__ModuleLoader__')) throw new Error('output missing loade
 if (!wrapped.includes(`id: ${JSON.stringify(name)}`)) throw new Error('output missing module id');
 if (!wrapped.includes(globalName)) throw new Error('output missing bundle global');
 
-console.log(`built ${name} -> client.js (${Buffer.byteLength(wrapped, 'utf8')} bytes)`);
+console.log(`built ${name} -> dist/client.js (${Buffer.byteLength(wrapped, 'utf8')} bytes)`);
 
 // ── Host half ──────────────────────────────────────────────────────────────
 // Plain ESM for the Host process. Node-provided builtins stay external; the
@@ -134,4 +139,4 @@ const hostBanner = `/**
 `;
 
 await writeFile(hostOutfile, hostBanner + hostBundle.text, 'utf8');
-console.log(`built ${name} -> index.js (${Buffer.byteLength(hostBanner + hostBundle.text, 'utf8')} bytes)`);
+console.log(`built ${name} -> dist/index.js (${Buffer.byteLength(hostBanner + hostBundle.text, 'utf8')} bytes)`);

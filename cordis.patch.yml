@@ -2,8 +2,8 @@
 #
 # Referenced by package.json `dsh.bundle.patch`. Installing the package into a
 # profile appends it to that profile's layer stack, and this row loads the host
-# half (index.js) as an ordinary Cordis plugin. The browser half rides the
-# `dsh.client` scan (client.js).
+# half (dist/index.js) as an ordinary Cordis plugin. The browser half rides the
+# `dsh.client` scan (dist/client.js).
 #
 # The host half does the real work: it intercepts a `!` line at `agent/pre-step`,
 # runs it through the composed `subprocess` service, and appends the call and its

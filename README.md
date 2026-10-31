@@ -17,21 +17,32 @@ It is the `!` of a terminal, moved into the chat box: no terminal window, no `ba
 
 ## Installation
 
-In the Plugin page, choose **Add plugin**, then paste this repository address into the input field:
+The repository ships **sources only**: `dist/` is git-ignored build output, so a Git checkout holds nothing the Harness can load. The installable artifact is the tarball attached to a GitHub Release, which is already built:
+
+In the Plugin page, choose **Add plugin**, then paste the release asset address for the version you want:
 
 ```text
-https://github.com/Mooling0602/dsh-hint-shell
+https://github.com/Mooling0602/dsh-hint-shell/releases/download/0.1.0/dsh-hint-shell-0.1.0.tgz
 ```
 
-This repository ships its build output (`index.js`, `client.js`), so a plain Git address is enough and there is no build step to wait for. Restart DSH after it installs.
+A downloaded asset works the same way through its local path (`./dsh-hint-shell-<version>.tgz`). Restart DSH after it installs.
 
 The same thing from the command line, for scripted setups:
 
 ```sh
-dsh plugin --profile web add https://github.com/Mooling0602/dsh-hint-shell
+dsh plugin --profile web add \
+  https://github.com/Mooling0602/dsh-hint-shell/releases/download/0.1.0/dsh-hint-shell-0.1.0.tgz
 ```
 
-To update, repeat the same installation with the latest commit. `dsh plugin` forwards to pnpm inside the profile directory, so never edit `~/.dsh/profiles/web/node_modules` by hand: the next pnpm operation overwrites it.
+A Git address also works, because `package.json` builds on install through its `prepare` script:
+
+```sh
+dsh plugin --profile web add github:Mooling0602/dsh-hint-shell
+```
+
+That channel needs Node `^22.19.0 || >=24.0.0` and a build step, and pnpm blocks build scripts by default: allow the exact key pnpm prints in the profile's `pnpm-workspace.yaml` (`allowBuilds`) and re-run, or pass `--allow-build` for a one-off install.
+
+To update, repeat the installation with the new release asset. A tarball URL is pinned in the profile manifest, so moving between versions means `remove` and `add`. `dsh plugin` forwards to pnpm inside the profile directory, so never edit `~/.dsh/profiles/web/node_modules` by hand: the next pnpm operation overwrites it.
 
 ## Usage
 
@@ -84,11 +95,11 @@ Sources are TypeScript; both shipped JavaScript files are generated.
 ```sh
 npm install          # typescript + esbuild + @types/react + react
 npm run typecheck    # tsc --noEmit
-npm run build        # src/ -> client.js, host.ts -> index.js
+npm run build        # src/ -> dist/client.js, host.ts -> dist/index.js
 npm test             # composer, shell-line, and installed-Harness format tests
 ```
 
-`npm run build` is deterministic: on an unchanged tree it leaves `git status` clean. A dirty rebuild means the sources and the committed bundles had already drifted. Commit regenerated bundles with the source change that caused them.
+`dist/` is not committed: the build writes only to that git-ignored directory, so a rebuild never dirties the tree. The shipped bundles come from the release tarball, which the release workflow packs from a fresh build of the tag.
 
 `test/dsh-format.test.ts` drives the host hook against an installed Harness. It resolves the Harness packages from the host installation, and reports a skip when none is available.
 
@@ -110,8 +121,10 @@ The host half hooks `agent/pre-step`, the last point before the loop dispatches 
 | Path | Purpose |
 | --- | --- |
 | `host.ts` | Host half: the `!` pre-step hook, record pair, and provenance line (source). |
-| `index.js` | Generated Host module. Do not edit. |
-| `client.js` | Generated Client bundle. Do not edit. |
+| `dist/index.js` | Generated Host module, git-ignored. Do not edit. |
+| `dist/client.js` | Generated Client bundle, git-ignored. Do not edit. |
+| `build.mjs` | Bundles `src/` into `dist/`. |
+| `PUBLISHING.md` | Release, install and update channels. |
 | `src/config.ts` | The `Config` schema, and the limits read from the terminal entry. |
 | `src/exec.ts` | Shell-line parsing, execution, and output formatting. |
 | `src/locales.ts` | Every runtime string, in both languages. |
