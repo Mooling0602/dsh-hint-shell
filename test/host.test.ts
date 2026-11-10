@@ -198,28 +198,83 @@ await check('a spawn failure is failure', () => {
 console.log('\n[4] execution — argv, cwd, and collected output');
 
 /**
- * Locate an installed Harness checkout, for the checks that need a process the
- * plugin can actually kill.
+ * The two packages driving a real process, as installed.
  *
- * The provider is a composed Cordis service rather than an npm library, so it is
- * loaded from the installation. Without one, those checks report as skipped:
- * a fake spawn cannot prove that a timeout terminates anything.
- *
- * Everything here is derived at runtime. A pinned path would only ever be right
- * on the machine it was written on, and a miss silently downgrades the checks to
- * skips — which is precisely how they stop guarding anything.
- *
- * @returns the checkout root, or undefined when no installation is resolvable.
+ * They are referenced by package name rather than by a path inside a checkout:
+ * where a package sits depends on how the Harness was installed, while the name
+ * of the package that provides the subprocess service does not. The paths are
+ * resolved relative to whichever `@deepseek-ai` directory satisfies
+ * {@link harnessModules}.
  */
-function harnessCheckout(): string | undefined {
-  const usable = (candidate: string | undefined): candidate is string =>
-    candidate !== undefined
-    && candidate.length > 0
-    && existsSync(join(candidate, 'vendor/cordis/lib/index.js'));
-  const explicit = [process.env.DSH_INSTALL, process.env.DSH].find(usable);
-  if (explicit !== undefined) return explicit;
-  // The launcher is a symlink into the installation prefix, and the workspace
-  // sits at `<prefix>/lib/deepseek-harness-git`.
+const CORDIS_PACKAGE = 'cordis';
+const SUBPROCESS_PACKAGE = 'dsh-subprocess-local';
+
+/** Entry point of a package's ESM build, relative to its directory. */
+const PACKAGE_ENTRY = 'lib/index.js';
+
+/**
+ * Read the `@deepseek-ai` module directory behind an installed launcher.
+ *
+ * The launcher is a symlink into the installation prefix, so its real path
+ * names the installation instead of a pinned absolute one:
+ *
+ * - npm global layout — the launcher resolves to
+ *   `<npm root -g>/@deepseek-ai/dsh/lib/bin.js`, and the packages the Host
+ *   composes live in that installation's own `node_modules/@deepseek-ai`.
+ * - monorepo checkout — the launcher resolves to
+ *   `<prefix>/lib/deepseek-harness-git/…`, whose packages are spread across
+ *   `apps/`, `packages/` and `vendor/`.
+ *
+ * @param launcher - real path of the `dsh` command.
+ * @returns the `@deepseek-ai` directories that may hold the packages.
+ */
+function modulesFromLauncher(launcher: string): string[] {
+  const packageRoot = dirname(dirname(launcher));
+  return [
+    // npm global: <pkgRoot>/node_modules/@deepseek-ai
+    join(packageRoot, 'node_modules', '@deepseek-ai'),
+    // monorepo: the checkout that contains the packages.
+    join(packageRoot, 'lib', 'deepseek-harness-git', 'node_modules', '@deepseek-ai'),
+    join(packageRoot, 'node_modules', '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai'),
+  ];
+}
+
+/**
+ * Locate the `@deepseek-ai` directory that holds both packages a real spawn
+ * needs, for the checks that must kill an actual process.
+ *
+ * The provider is a composed Cordis service rather than a plain npm library, so
+ * it is loaded from the installation. Without one those checks report as
+ * skipped: a fake spawn cannot prove that a timeout terminates anything.
+ *
+ * A skip is only honest when nothing is installed. Every candidate is therefore
+ * derived at runtime — a pinned path would only ever be right on the machine it
+ * was written on — and both supported layouts are probed rather than assumed,
+ * because reading only one of them downgrades the checks to skips on the other
+ * and that is precisely how they stop guarding anything.
+ *
+ * @returns the module directory, or undefined when no installation is usable.
+ */
+function harnessModules(): string | undefined {
+  const usable = (candidate: string): boolean =>
+    existsSync(join(candidate, CORDIS_PACKAGE, PACKAGE_ENTRY))
+    && existsSync(join(candidate, SUBPROCESS_PACKAGE, PACKAGE_ENTRY));
+
+  // An explicit override wins: `DSH_MODULES` may name the installation root, the
+  // directory that contains `dsh-session/`, or the `@deepseek-ai` directory
+  // itself, which is the same convention `dsh-format.test.ts` follows.
+  const override = process.env.DSH_MODULES;
+  if (override !== undefined && override.length > 0) {
+    const candidates = [
+      override,
+      join(override, '@deepseek-ai'),
+      join(override, 'node_modules', '@deepseek-ai'),
+      join(override, 'node_modules', '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai'),
+    ];
+    const hit = candidates.find(usable);
+    if (hit !== undefined) return hit;
+  }
+
   for (const dir of (process.env.PATH ?? '').split(delimiter)) {
     if (dir.length === 0) continue;
     let launcher: string;
@@ -228,24 +283,28 @@ function harnessCheckout(): string | undefined {
     } catch {
       continue;
     }
-    const checkout = join(dirname(dirname(launcher)), 'lib', 'deepseek-harness-git');
-    if (usable(checkout)) return checkout;
+    const hit = modulesFromLauncher(launcher).find(usable);
+    if (hit !== undefined) return hit;
   }
   return undefined;
 }
 
-/** The installation backing {@link realSubprocess}, when there is one. */
-const checkout = harnessCheckout();
+/** The module directory backing {@link realSubprocess}, when there is one. */
+const modules = harnessModules();
 
 /** The real subprocess provider, or undefined when no installation is present. */
 async function realSubprocess(): Promise<SubprocessLike | undefined> {
-  if (checkout === undefined) return undefined;
-  const { Context } = await import(pathToFileURL(join(checkout, 'vendor/cordis/lib/index.js')).href);
-  const { default: LocalSubprocessRuntime } = await import(
-    pathToFileURL(join(checkout, 'packages/subprocess/subprocess-local/lib/index.js')).href
+  if (modules === undefined) return undefined;
+  const { Context } = await import(pathToFileURL(join(modules, CORDIS_PACKAGE, PACKAGE_ENTRY)).href);
+  const subprocessModule = await import(
+    pathToFileURL(join(modules, SUBPROCESS_PACKAGE, PACKAGE_ENTRY)).href
   );
+  // The package exposes the runtime under both `default` and `LocalSubprocessRuntime`,
+  // so accepting either keeps this import working without pinning which one a
+  // given build exports.
+  const plugin = subprocessModule.default ?? subprocessModule.LocalSubprocessRuntime;
   const ctx = new Context();
-  await ctx.plugin(LocalSubprocessRuntime);
+  await ctx.plugin(plugin);
   return ctx.get('subprocess') as SubprocessLike | undefined;
 }
 
