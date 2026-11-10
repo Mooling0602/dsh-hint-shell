@@ -29,9 +29,10 @@ This project has a strict language split. Follow it for every change:
 | README prose | both | `README.md` and `README.zh.md` are kept in sync |
 | Conversation with the maintainer | Chinese | reply in Simplified Chinese |
 
-## Markdown documents
+## Markdown documents and commit messages
 
 - **Do not wrap lines.** A paragraph, a list item, and a blockquote paragraph each go on one line, however long that line becomes. Never hard-wrap prose to a fixed column: a hand-wrapped line renders as a hard line break on GitHub, so the wrap is invisible in the source and visible in the output. Tables keep one row per line and fenced code blocks are left alone, because in both the line break is the syntax rather than the layout.
+- **A commit body follows the same rule.** One line per paragraph, however long it becomes. A fixed column is wrong in some reader's terminal or review window, and editing one word inside a hard-wrapped paragraph reflows every line of it. Only the summary keeps a length limit, because it is displayed as a single line (`--oneline`, subject listings).
 - **`.markdownlint.json` encodes that choice.** `MD013` (line length) is off, which is what makes a long line compliant instead of a defect, and `MD024` permits the same heading text under different parents. markdownlint is a local convenience, not a gate: no workflow runs it, so run `npx --yes markdownlint-cli2 README.md README.zh.md CHANGELOG.md` by hand when you want the feedback.
 - **Keep CJK text joined without a space.** When a Chinese line continues on the next source line, the joined result has no space where an English sentence would need one.
 
