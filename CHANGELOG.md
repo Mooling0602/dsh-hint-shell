@@ -9,13 +9,30 @@ For CI, every version's release note is assembled from `Header` and `Endfix`, ex
 > [!NOTE]
 > Copy the attached plugin package link and paste it into dsh's "Add plugin" input field to install or update. Copy the full release-note texts and paste to AI to get the translation for other languages.
 >
-> 复制插件包链接并粘贴到 dsh 的“添加插件”输入框中，即可安装或更新。复制更新日志全文并粘贴给 AI 以获取中文翻译。
+> 复制插件包链接并粘贴到 dsh 的“添加插件”输入框中，即可安装或更新。
 
 ## Endfix
 
 **full_changelog!**
 
+## 0.1.1
+
+### Fixes
+
+- Updated the composer hint copy in the conversation view. / 修改了会话页中提示词输入框内的文案。
+
+### Test
+
+- Fixed the dsh installation lookup in the test module. / 修复了测试模块中的 dsh 路径定位问题。
+
 ## 0.1.0
+
+### Header
+
+> [!NOTE]
+> Copy the attached plugin package link and paste it into dsh's "Add plugin" input field to install or update. Copy the full release-note texts and paste to AI to get the translation for other languages.
+>
+> 复制插件包链接并粘贴到 dsh 的“添加插件”输入框中，即可安装或更新。复制更新日志全文并粘贴给 AI 以获取中文翻译。
 
 ### Features
 
