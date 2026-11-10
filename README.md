@@ -8,7 +8,7 @@ It is the `!` of a terminal, moved into the chat box: no terminal window, no `ba
 
 ## Features
 
-- **The composer tells you it is available.** An empty composer gains `, type ! for shell commands` after the shipped placeholder text, so `!` is discoverable without documenting it separately.
+- **The composer tells you it is available.** An empty composer gains `, ! type a shell command to execute` after the shipped placeholder text, so `!` is discoverable without documenting it separately.
 - **The hint appears as you type.** After a bare `!`, a gray `Enter a shell command…` appears right behind it, and the moment you type real text the hint disappears and gives the line back to you.
 - **The output goes into the chat.** `!ls` returns its output as a tool call and result, so the next thing you ask the model about already includes it. **No model request is spent on the `!` line itself.**
 - **Quoting, pipes, and globs behave as in a terminal.** The command runs through `/bin/sh -c`, or `cmd.exe` on Windows.
